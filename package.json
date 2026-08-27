@@ -9,7 +9,7 @@
     "dev": "tsx src/server.ts",
     "dev:watch": "tsx watch --exclude \"data/**/*\" src/server.ts",
     "build": "tsc && vite build --config web/vite.config.ts && tsc -p tsconfig.electron.json",
-    "build:electron": "npm run build && electron-builder --win portable",
+    "build:electron": "npm run build && npm run build:exe && electron-builder --win portable",
     "build:exe": "npm run build && node scripts/build-sea-bundle.mjs && node scripts/gen-sea-assets.mjs && node --experimental-sea-config sea-config.json && node -e \"const fs=require('fs');fs.mkdirSync('release',{recursive:true});fs.copyFileSync(process.execPath,'release/agentforge-web.exe')\" && npx postject release/agentforge-web.exe NODE_SEA_BLOB dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
     "electron:dev": "concurrently -n server,web,electron -c blue,green,magenta \"npm run dev:watch\" \"npm run dev:web\" \"wait-on http://localhost:3001 && npx electron dist-electron/main.js\"",
     "start": "tsx src/server.ts",
@@ -41,6 +41,10 @@
       {
         "from": "start.sh",
         "to": "start.sh"
+      },
+      {
+        "from": "release/agentforge-web.exe",
+        "to": "agentforge-web.exe"
       }
     ],
     "win": {
