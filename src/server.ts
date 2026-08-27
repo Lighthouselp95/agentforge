@@ -872,9 +872,7 @@ AGENT_ID: ${agent.id}
 STATUS: completed
 WHAT I DID: <summary>
 === END REPORT ===`;
-    const prompt = (agent.sessionId && !needReinject)
-      ? `[TEAM UPDATE]\n${team}\n\n=== INCOMING MESSAGE ===\nFROM: Orchestrator (orchestrator)\nTO: ${agent.name} (${agent.id})\n=== MESSAGE ===\n${resumeMsg}`
-      : `[TASK] ${agent.task || 'General task'}\n[TEAM]\n${team}\n[/TEAM]\n\n=== INCOMING MESSAGE ===\nFROM: Orchestrator\nTO: ${agent.name} (${agent.id})\n=== MESSAGE ===\n${resumeMsg}`;
+    const prompt = `[TASK] ${agent.task || 'Continue your previous work.'}\n[TEAM]\n${team}\n[/TEAM]\n\n=== INCOMING MESSAGE ===\nFROM: Orchestrator (orchestrator)\nTO: ${agent.name} (${agent.id})\n=== MESSAGE ===\n${resumeMsg}`;
     const result = await client.enqueue(`${prompt}\n\n${buildWorkerPrompt(agent.role, agent, !agent.sessionId || needReinject)}`);
     const newSid = client.getSessionId();
     const isNewSession = Boolean(newSid && newSid !== agent.sessionId);
@@ -924,13 +922,22 @@ WHAT I DID: <summary>
 
 async function deleteAgent(id: string): Promise<boolean> {
   if (id === 'orchestrator') {
-    throw new Error('Cannot delete orchestrator agent');
+    throw new Error('Cannot delete main orchestrator agent');
   }
 
   const a = agents.get(id) || (storage.getAgent(id) as any);
   const client = clients.get(id);
 
-  // 1. Abort tiến trình con nếu đang chạy
+  // 1. Reassign any children workers of this orchestrator back to main orchestrator
+  for (const [, child] of agents) {
+    if (child.spawnedBy === id) {
+      child.spawnedBy = 'orchestrator';
+      storage.updateAgent(child.id, { spawnedBy: 'orchestrator' } as any);
+      broadcast('agent:updated', { agent: child });
+    }
+  }
+
+  // 2. Abort tiến trình con nếu đang chạy
   if (client) {
     try {
       client.abort();
@@ -939,10 +946,10 @@ async function deleteAgent(id: string): Promise<boolean> {
     }
   }
 
-  // 2. Xóa session mapping trong ACPClient
+  // 3. Xóa session mapping trong ACPClient
   ACPClient.unregisterSession(id);
 
-  // 3. Xóa dọn session trong OpenCode storage
+  // 4. Xóa dọn session trong OpenCode storage
   const sid = a?.sessionId || a?.session_id || (client ? client.getSessionId() : null);
   if (client) {
     try {
@@ -960,10 +967,10 @@ async function deleteAgent(id: string): Promise<boolean> {
     }
   }
 
-  // 4. Xóa toàn bộ conversation và transcript khỏi Database storage
+  // 5. Xóa toàn bộ conversation và transcript khỏi Database storage
   storage.clearAgentConversation(id);
 
-  // 5. Xóa tin nhắn khỏi bộ nhớ RAM chatHistory
+  // 6. Xóa tin nhắn khỏi bộ nhớ RAM chatHistory
   const remainingChat = chatHistory.filter(m => m.from !== id && m.to !== id);
   chatHistory.length = 0;
   chatHistory.push(...remainingChat);
@@ -1092,7 +1099,7 @@ function checkAndSynthesize(completedAgentId: string) {
       }
       const cleanContent = stripCommandTags(result.content).trim().normalize('NFC');
 
-      if (cleanContent && !isOrchestratorResponseDuplicate(cleanContent)) {
+      if (cleanContent) {
         const orchMsg: ChatMsg = { id: uuidv4(), from: 'orchestrator', to: 'user', content: cleanContent, timestamp: Date.now(), agentName: 'Orchestrator', agentRole: 'orchestrator' };
         chatHistory.push(orchMsg); storage.saveMessage(orchMsg);
         trimChatHistory();
@@ -1517,13 +1524,8 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
     return matches;
   }
 
-  // Check if there is meaningful text before the first [TO: ...] tag
-  const preText = cleanContent.substring(0, tagMatches[0].index);
-  const cleanPreText = preText.replace(/\[FROM:\s*[^\]]+\]/gi, '').trim();
-  if (cleanPreText) {
-    matches.push({ to: defaultTo, message: cleanPreText });
-  }
-
+  // Khi ĐÃ CÓ tag [TO: ...] trong output, CHỈ trích xuất các phân đoạn sau từng tag [TO:].
+  // Bỏ qua preText mở đầu tự sự phía trước để tránh sinh ra 2 Message Object cùng gửi tới 1 đích.
   for (let i = 0; i < tagMatches.length; i++) {
     const cur = tagMatches[i];
     const startIndex = cur.index + cur.length;
@@ -1656,27 +1658,12 @@ function parseOrchestratorCommands(text: string): Array<{ agentId: string; messa
 // ============ ORCHESTRATOR TRIGGER DEBOUNCE & BATCHING ============
 let orchTriggerDebounceTimer: NodeJS.Timeout | null = null;
 let pendingOrchTriggers: Array<{ fromAgent: Agent; message: string; reportId: string; attempts: number; targetOrchId?: string }> = [];
-let lastOrchestratorMessageHash: string = '';
-let lastOrchestratorMessageTime: number = 0;
 const ORCH_TRIGGER_DEBOUNCE_MS = 1500; // 1.5s debounce gom báo cáo từ nhiều worker
-const ORCH_DEDUPLICATION_WINDOW_MS = 15000; // 15s deduplication window
 const ORCH_MAX_RETRY = 5; // số lần retry in-session trước khi chờ restart replay
 const ABORT_ERROR_PATTERN = /Agent operation aborted by user|turn failed/i;
 // Auto-wakeup khi worker im lặng nhưng có tool_use thật: throttle 30s/agent chống loop
 const TOOL_WAKEUP_THROTTLE_MS = 30000;
 const lastToolWakeupAt = new Map<string, number>();
-
-function isOrchestratorResponseDuplicate(content: string): boolean {
-  if (!content || !content.trim()) return true;
-  const hash = content.trim().normalize('NFC').replace(/\s+/g, ' ');
-  const now = Date.now();
-  if (hash === lastOrchestratorMessageHash && (now - lastOrchestratorMessageTime < ORCH_DEDUPLICATION_WINDOW_MS)) {
-    return true;
-  }
-  lastOrchestratorMessageHash = hash;
-  lastOrchestratorMessageTime = now;
-  return false;
-}
 
 function resolveOrchestratorTarget(fromAgent: Agent): string {
   const parentId = fromAgent.spawnedBy;
@@ -1816,8 +1803,7 @@ async function processOrchestratorTriggerQueue() {
       }
       const cleanUserContent = stripCommandTags(result.content).trim().normalize('NFC');
 
-      // Deduplication check: Chặn gửi nhiều phản hồi trùng nhau cho người dùng trong vòng 15s
-      if (cleanUserContent && !isOrchestratorResponseDuplicate(cleanUserContent)) {
+      if (cleanUserContent) {
         const orchMsg: ChatMsg = {
           id: uuidv4(),
           from: orchId,
@@ -1830,8 +1816,6 @@ async function processOrchestratorTriggerQueue() {
         chatHistory.push(orchMsg);
         storage.saveMessage(orchMsg);
         broadcast('chat:message', { msg: orchMsg });
-      } else if (cleanUserContent) {
-        console.log(`[Orchestrator] Suppressed duplicate response to user (within 15s): "${cleanUserContent.slice(0, 50)}..."`);
       }
       
       await handleOrchestratorResponse(result.content, (result as any).thinking || '');
@@ -1894,6 +1878,7 @@ function extractCleanTaskReport(content: string): string {
   return text.slice(from, end).trim();
 }
 
+// Deduplicate: track các nội dung broadcast gần đây (4s window) để tránh nhân đôi report
 async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo: string = 'orchestrator', toolCalls?: Array<{ tool: string; input?: string; output?: string }>, thinking?: string) {
   await parseAgentCommands(content, fromAgent.id);
   let messages = parseAgentOutput(content, defaultTo);
@@ -1905,8 +1890,6 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
   }
 
   let hasOrchestratorMessage = false;
-  // Deduplicate: track các nội dung đã broadcast để tránh gửi trùng
-  const broadcastedContents = new Set<string>();
 
   for (const msg of messages) {
     const isInternal = msg.to !== 'user' && msg.to !== 'broadcast';
@@ -1918,15 +1901,6 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
     const outContent = isToOrchestrator
       ? extractCleanTaskReport(stripToolNoiseForOrchestrator(msg.message))
       : msg.message;
-
-    // Chống broadcast trùng: nếu nội dung đã gửi rồi → skip
-    const contentKey = `${resolvedTo}|||${(outContent || '').trim()}`;
-    if (outContent && broadcastedContents.has(contentKey)) {
-      console.log(`[Route] Skip duplicate broadcast from ${fromAgent.name} to ${resolvedTo}`);
-      if (isToOrchestrator) hasOrchestratorMessage = true;
-      continue;
-    }
-    if (outContent) broadcastedContents.add(contentKey);
 
     const reply: ChatMsg = {
       id: uuidv4(),
@@ -2032,15 +2006,20 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
     const tc = getClient(targetAgent);
     const needReinject = tc.getNeedPromptReinject() || !targetAgent.sessionId;
     if (needReinject) tc.setNeedPromptReinject(false);
+
+    // Cập nhật task cho targetAgent nếu tin nhắn đến từ Orchestrator
+    if (fromAgent.role === 'orchestrator' || fromAgent.id === 'orchestrator' || fromAgent.type === 'orchestrator') {
+      const trimmedTask = msg.message.trim();
+      if (trimmedTask) {
+        targetAgent.task = trimmedTask;
+        storage.updateAgent(targetAgent.id, { task: trimmedTask } as any);
+      }
+    }
+
     const talkHeader = `=== INCOMING MESSAGE ===\nFROM: ${fromAgent.name} (ID: ${fromAgent.id}, Role: ${fromAgent.role})\nTO: ${targetAgent.name} (ID: ${targetAgent.id}, Role: ${targetAgent.role})\n=== MESSAGE ===`;
 
-    let talkPrompt = '';
-    if (targetAgent.sessionId && !needReinject) {
-      talkPrompt = `${talkHeader}\n${msg.message}`;
-    } else {
-      const talkTeam = buildTeam(targetAgent.id);
-      talkPrompt = `[TASK] ${targetAgent.task || 'General task'}\n[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${msg.message}\n\n${WORKER_REMINDER}`;
-    }
+    const talkTeam = buildTeam(targetAgent.id);
+    const talkPrompt = `[TASK] ${targetAgent.task || 'General task'}\n[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${msg.message}\n\n${WORKER_REMINDER}`;
     // WORKING NGAY TRƯỚC ENQUEUE: badge worker trên UI nhảy sang Working tức thì,
     // không phụ thuộc caller có set hay không (cover cả đường replay outbox).
     targetAgent.status = 'working';
@@ -2177,14 +2156,8 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
           const tc = getClient(existing);
           const needReinject = tc.getNeedPromptReinject() || !existing.sessionId;
           if (needReinject) tc.setNeedPromptReinject(false);
-          let prompt = '';
-          if (existing.sessionId && !needReinject) {
-            // Worker đã có session: gửi trực tiếp thông báo task mới, không nhồi format
-            prompt = `=== INCOMING MESSAGE ===\nFROM: Orchestrator (ID: orchestrator)\nTO: ${existing.name} (ID: ${existing.id}, Role: ${existing.role})\n=== MESSAGE ===\nNew task: ${task}`;
-          } else {
-            const spawnTeam = buildTeam(existing.id);
-            prompt = `[TASK] ${task}\n[TEAM]\n${spawnTeam}\n[/TEAM]\n\n=== INCOMING MESSAGE ===\nFROM: Orchestrator (ID: orchestrator)\nTO: ${existing.name} (ID: ${existing.id}, Role: ${existing.role})\n=== MESSAGE ===\n${task}\n\n${WORKER_REMINDER}`;
-          }
+          const spawnTeam = buildTeam(existing.id);
+          const prompt = `[TASK] ${task}\n[TEAM]\n${spawnTeam}\n[/TEAM]\n\n=== INCOMING MESSAGE ===\nFROM: Orchestrator (ID: orchestrator)\nTO: ${existing.name} (ID: ${existing.id}, Role: ${existing.role})\n=== MESSAGE ===\n${task}\n\n${WORKER_REMINDER}`;
           const tr = await tc.enqueue(prompt);
           const newSid = tc.getSessionId();
           const isNewSession = !!(newSid && newSid !== existing.sessionId);
@@ -2411,15 +2384,14 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
         if (needReinject) tc.setNeedPromptReinject(false);
         const talkHeader = `=== INCOMING MESSAGE ===\nFROM: Orchestrator (orchestrator)\nTO: ${ta.name} (ID: ${ta.id}, Role: ${ta.role})\n=== MESSAGE ===`;
         
-        let talkPrompt = '';
-        if (ta.sessionId && !needReinject) {
-          // Worker đã có session: CẮT BỎ HOÀN TOÀN [TEAM UPDATE], Members:, Your task:, WORKER_REMINDER
-          talkPrompt = `${talkHeader}\n${message}`;
-        } else {
-          // Khởi tạo session đầu tiên: nạp [TASK], [TEAM] và WORKER_REMINDER
-          const talkTeam = buildTeam(ta.id);
-          talkPrompt = `[TASK] ${ta.task || 'General task'}\n[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${message}\n\n${WORKER_REMINDER}`;
+        // Cập nhật task cho ta nếu có nội dung mới
+        const trimmedMsg = message.trim();
+        if (trimmedMsg) {
+          ta.task = trimmedMsg;
+          storage.updateAgent(ta.id, { task: trimmedMsg } as any);
         }
+        const talkTeam = buildTeam(ta.id);
+        const talkPrompt = `[TASK] ${ta.task || 'General task'}\n[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${message}\n\n${WORKER_REMINDER}`;
         const tr = await tc.enqueue(talkPrompt);
         const newSid = tc.getSessionId();
         const isNewSession = Boolean(newSid && newSid !== ta.sessionId);

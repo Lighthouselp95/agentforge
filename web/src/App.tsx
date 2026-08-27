@@ -56,6 +56,7 @@ export function App() {
   const [allMessages, setAllMessages] = useState<ChatMsg[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [showSpawn, setShowSpawn] = useState(false);
+  const [spawnParentId, setSpawnParentId] = useState<string | null>(null);
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [connected, setConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('disconnected');
@@ -116,18 +117,6 @@ export function App() {
     try { localStorage.setItem('af-theme', theme); } catch {}
   }, [theme]);
 
-  // Polling mỗi 10s: làm tươi danh sách agents (status, tokenUsage...) dù không có WS event
-  useEffect(() => {
-    const t = setInterval(() => {
-      fetch(`${API}/api/agents`)
-        .then(r => r.json())
-        .then((data) => {
-          if (Array.isArray(data)) applyAgents(data);
-        })
-        .catch(() => {});
-    }, 10_000);
-    return () => clearInterval(t);
-  }, []);
 
   // Spinner khớp trạng thái agent đích — debounce 700ms sau khi gửi để tránh flicker
   useEffect(() => {
@@ -210,9 +199,10 @@ export function App() {
   };
 
   // Fetch history from DB — merge (not overwrite) to avoid race with WS messages arriving during fetch
-  const fetchHistory = async () => {
+  const fetchHistory = async (agentId?: string | null) => {
     try {
-      const res = await fetch(`${API}/api/history?limit=${HISTORY_FETCH_LIMIT}`);
+      const targetParam = agentId ? `&agentId=${encodeURIComponent(agentId)}` : '';
+      const res = await fetch(`${API}/api/history?limit=${HISTORY_FETCH_LIMIT}${targetParam}`);
       const data: ChatMsg[] = await res.json();
       if (!Array.isArray(data)) return;
       setAllMessages(prev => {
@@ -279,6 +269,7 @@ export function App() {
       }
       setAllMessages(prev => {
         if (prev.some(p => p.id === m.id)) return prev;
+
         if (m.from === 'user') {
           const tempIdx = prev.findIndex(p => p.id.startsWith('temp-') && p.content === m.content && p.to === m.to);
           if (tempIdx !== -1) {
@@ -609,16 +600,33 @@ export function App() {
   };
 
   const filteredMessages = selectedAgentId
-    ? allMessages.filter(m =>
-        !isSystemMsg(m) && (
-          m.from === selectedAgentId ||
-          m.to === selectedAgentId ||
-          (m.from === 'user' && m.to === selectedAgentId) ||
-          (m.from === selectedAgentId && m.to === 'user') ||
-          (m.msgType === 'error' && (m.from === selectedAgentId || m.to === selectedAgentId || m.to === 'user')) ||
-          (m.from === 'error' && (m.to === selectedAgentId || m.to === 'user'))
-        )
-      )
+    ? (() => {
+        const sel = agents.find(a => a.id === selectedAgentId);
+        const isSubOrch = sel?.type === 'orchestrator' || sel?.role === 'orchestrator';
+        return allMessages.filter(m => {
+          if (isSystemMsg(m)) return false;
+          if (isSubOrch) {
+            if (m.msgType === 'opencode') return false;
+            if (m.from === selectedAgentId && m.to && m.to !== 'user' && m.to !== 'broadcast') return false;
+            const isFromWorker = m.from !== 'user' && m.from !== selectedAgentId && m.from !== 'system' && m.from !== 'error';
+            if (isFromWorker) {
+              return m.to === selectedAgentId && /=== TASK REPORT ===|Task complete\./.test(m.content || '');
+            }
+            return (
+              (m.from === 'user' && m.to === selectedAgentId) ||
+              (m.from === selectedAgentId && (m.to === 'user' || m.to === 'broadcast' || !m.to)) ||
+              (m.msgType === 'error' && (m.from === selectedAgentId || m.to === selectedAgentId)) ||
+              (m.from === 'error' && m.to === selectedAgentId)
+            );
+          }
+          return (
+            m.from === selectedAgentId ||
+            m.to === selectedAgentId ||
+            (m.msgType === 'error' && (m.from === selectedAgentId || m.to === selectedAgentId)) ||
+            (m.from === 'error' && m.to === selectedAgentId)
+          );
+        });
+      })()
     : allMessages.filter(m => {
         if (isSystemMsg(m)) return false;
         if (isInternalMsg(m)) return false;
@@ -785,6 +793,7 @@ export function App() {
   const selectAgent = (agentId: string | null) => {
     setSelectedAgentId(agentId);
     if (isMobile) setSidebarOpen(false);
+    fetchHistory(agentId);
   };
 
   const sidebarStyle: React.CSSProperties = isMobile
@@ -1028,7 +1037,10 @@ export function App() {
         <Dashboard
           agents={agents}
           onStart={startAgent}
-          onSpawn={() => setShowSpawn(true)}
+          onSpawn={(parentId) => {
+            setSpawnParentId(parentId || selectedAgentId || 'orchestrator');
+            setShowSpawn(true);
+          }}
           onSelect={selectAgent}
           selectedAgentId={selectedAgentId}
           onUpdateModel={updateAgentModel}
@@ -1140,7 +1152,12 @@ export function App() {
 
       {/* Spawn Dialog */}
       {showSpawn && (
-        <SpawnDialog onAdd={addAgent} onClose={() => setShowSpawn(false)} />
+        <SpawnDialog
+          onAdd={addAgent}
+          onClose={() => setShowSpawn(false)}
+          agents={agents}
+          defaultSpawnedBy={spawnParentId || (selectedAgentId && agents.find(a => a.id === selectedAgentId)?.type === 'orchestrator' ? selectedAgentId : 'orchestrator')}
+        />
       )}
 
       {/* Model Hierarchy Settings Dialog */}
