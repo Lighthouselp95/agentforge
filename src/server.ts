@@ -13,6 +13,7 @@ import type { TokenUsage } from './agents/types.js';
 import { storage, MAX_PERSISTED_MESSAGES } from './storage.js';
 
 const __dirname = dirname(fileURLToPath(new URL('.', import.meta.url)));
+const APP_VERSION = '0.2.0';
 const PORT = parseInt(process.env.PORT || '3001');
 
 // SEA early: phai khai bao TRUOC loadPrompt de exe copy 1 file van doc duoc src/prompts nhung trong blob
@@ -2503,8 +2504,11 @@ function getOrchClient(): ACPClient {
 // Thời điểm server khởi động (epoch ms) — frontend dùng hiển thị uptime "Live WS"
 const SERVER_START_TIME = Date.now();
 app.get('/api/server-info', (_req, res) => {
-  const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
-  res.json({ serverStartTime: SERVER_START_TIME, uptimeMs: Date.now() - SERVER_START_TIME, cwd: process.cwd(), version: pkg.version || '0.0.0' });
+  try {
+    res.json({ serverStartTime: SERVER_START_TIME, uptimeMs: Date.now() - SERVER_START_TIME, cwd: process.cwd(), version: APP_VERSION });
+  } catch (err) {
+    res.json({ serverStartTime: SERVER_START_TIME, uptimeMs: Date.now() - SERVER_START_TIME, cwd: process.cwd(), version: APP_VERSION });
+  }
 });
 
 app.get('/api/agents', (_req, res) => {
