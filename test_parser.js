@@ -137,17 +137,6 @@ function extractBracketCommands(text, targetTags = ['TALK', 'SPAWN', 'CREATE ROL
 
 function parseTalkTag(tagContent) {
   if (!tagContent) return null;
-  
-  const paramRe = /\b(agent-id|agent_id|target-id|target_id|target|agent|to|id|message|msg|content|task)\s*=\s*/gi;
-  const found = [];
-  let pm;
-  while ((pm = paramRe.exec(tagContent)) !== null) {
-    const before = tagContent.substring(0, pm.index);
-    const inDouble = ((before.match(/"/g) || []).length % 2) === 1;
-    const inSingle = ((before.match(/'/g) || []).length % 2) === 1;
-    if (inDouble || inSingle) continue;
-    found.push({ key: (pm[1] ?? '').toLowerCase(), keyStart: pm.index, valueStart: pm.index + pm[0].length });
-  }
 
   const stripQuotes = (v) => {
     let t = v.trim();
@@ -163,25 +152,35 @@ function parseTalkTag(tagContent) {
       if (lastQuote > 0) return t.substring(1, lastQuote).trim();
       return t.substring(1).trim();
     }
-    // Nếu message không quote mà bị dính dấu ] đóng tag ở cuối chuỗi
+    // Nếu message không dùng quote mà bị dính dấu ] đóng tag ở cuối chuỗi
     if (t.endsWith(']')) {
       t = t.substring(0, t.length - 1).trim();
     }
     return t;
   };
 
-  const valueOf = (keys) => {
-    const p = found.find(f => keys.includes(f.key));
-    if (!p) return undefined;
-    const idx = found.indexOf(p);
-    const end = idx + 1 < found.length ? found[idx + 1].keyStart : tagContent.length;
-    return stripQuotes(tagContent.substring(p.valueStart, end));
-  };
+  // 1. Trích xuất target/agent-id trước
+  const targetMatch = tagContent.match(/(?:agent-id|agent_id|target-id|target_id|target|agent|to|id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s\]]+))/i);
+  const rawId = targetMatch ? (targetMatch[1] || targetMatch[2] || targetMatch[3] || targetMatch[4]) : '';
+  const agentId = cleanTargetIdentifier(rawId);
+  if (!agentId) return null;
 
-  const rawId = valueOf(['agent-id', 'agent_id', 'target-id', 'target_id', 'target', 'agent', 'to', 'id']);
-  const agentId = cleanTargetIdentifier(rawId || '');
-  const message = valueOf(['message', 'msg', 'content']);
-  const task = valueOf(['task']);
+  // 2. Trích xuất task nếu có (ưu tiên nếu task= đứng trước message=)
+  let task = undefined;
+  const taskParamMatch = tagContent.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s\]\n]+))/i);
+  if (taskParamMatch) {
+    const rawTask = taskParamMatch[1] || taskParamMatch[2] || taskParamMatch[3] || taskParamMatch[4] || '';
+    if (rawTask) task = stripQuotes(rawTask);
+  }
+
+  // 3. Trích xuất message: lấy toàn bộ nội dung từ sau 'message=' (hoặc 'msg=' hoặc 'content=')
+  const msgMarkerMatch = tagContent.match(/\b(message|msg|content)\s*=\s*/i);
+  let message = undefined;
+  if (msgMarkerMatch && msgMarkerMatch.index !== undefined) {
+    const msgStart = msgMarkerMatch.index + msgMarkerMatch[0].length;
+    const rawMsg = tagContent.substring(msgStart);
+    message = stripQuotes(rawMsg);
+  }
 
   const finalMessage = (message && message.trim()) || (task && task.trim());
   if (agentId && finalMessage) {
@@ -203,17 +202,44 @@ function assert(condition, message) {
   }
 }
 
-console.log('--- TEST 11: Lệnh TALK KHÔNG QUOTE có chứa ký tự [TALK dở dang bên trong ---');
-const input11 = `[TALK target=arch-dbg message=ĐIỀU TRA GẤP BẪY PARSER:
-Người dùng phát hiện lỗi:
-Khi Orchestrator gửi tin nhắn có dạng:
-\`[TALK
-Sau đó báo cáo lại.]`;
+console.log('===============================================================');
+console.log('CHẠY KIỂM THỬ BỘ TEST CASE PARSER MỚI (test_parser.js)');
+console.log('===============================================================\n');
 
+// Test Case 10: TÁI HIỆN LỖI THỰC TẾ: Message không dùng quote chứa cụm từ task= bên trong
+console.log('--- TEST 10: Lệnh TALK KHÔNG QUOTE chứa cụm từ task= trong nội dung ---');
+const input10 = `[TALK target=deployer message=Hỗ trợ tham số task= và tự cập nhật task vào database. Báo TASK REPORT khi xong.]`;
+const cmds10 = extractBracketCommands(input10, ['TALK']);
+assert(cmds10.length === 1, 'Should extract 1 TALK command');
+const parsed10 = parseTalkTag(cmds10[0]?.content || '');
+assert(parsed10?.agentId === 'deployer', 'Agent ID should be deployer');
+assert(parsed10?.message === 'Hỗ trợ tham số task= và tự cập nhật task vào database. Báo TASK REPORT khi xong.', 'Message containing task= phrase must not be cut');
+
+// Test Case 11: Lệnh TALK chứa dấu hai chấm, xuống dòng và [TALK mở dở dang trong nội dung
+console.log('\n--- TEST 11: Lệnh TALK chứa dấu hai chấm, xuống dòng và [TALK mở dở dang ---');
+const input11 = `[TALK target=arch-dbg message="ĐIỀU TRA GẤP BẪY PARSER TALK BỊ CẮT CỤT TẠI VỊ TRÍ DẤU HAI CHẤM VÀ XUỐNG DÒNG tại C:\\Users\\Hai Dang\\agentforge:
+
+Người dùng vừa bắt quả tang một lỗi parse thực tế cực kỳ điển hình:
+Khi Orchestrator gửi tin nhắn TALK có dạng:
+\`[TALK
+
+Sau đó báo cáo lại."]`;
 const cmds11 = extractBracketCommands(input11, ['TALK']);
-console.log('cmds11 length:', cmds11.length);
-if (cmds11[0]) {
-  console.log('cmd content:', JSON.stringify(cmds11[0].content));
-  const parsed11 = parseTalkTag(cmds11[0].content);
-  console.log('parsed11 message:', JSON.stringify(parsed11?.message));
-}
+assert(cmds11.length === 1, 'Should extract 1 TALK command');
+const parsed11 = parseTalkTag(cmds11[0]?.content || '');
+assert(parsed11?.agentId === 'arch-dbg', 'Agent ID should be arch-dbg');
+assert(parsed11?.message?.includes('Người dùng vừa bắt quả tang một lỗi parse'), 'Message must contain text after colon and newline');
+assert(parsed11?.message?.endsWith('Sau đó báo cáo lại.'), 'Message must not be truncated at `[TALK');
+
+// Test Case 12: Lệnh TALK nhiều dòng không quote chứa dấu đóng ] ở giữa dòng
+console.log('\n--- TEST 12: Lệnh TALK nhiều dòng không quote có dấu đóng ] ở cuối dòng 3 ---');
+const input12 = `[TALK target=verifyfix message=Kiểm chứng thực nghiệm fix binary tại test-agentforge thoi/agentforge-web.exe.new (94,812,672 bytes) và GitHub Release v0.2.3. Báo TASK REPORT kết luận 100% PASS toàn diện.]`;
+const cmds12 = extractBracketCommands(input12, ['TALK']);
+assert(cmds12.length === 1, 'Should extract 1 TALK command');
+const parsed12 = parseTalkTag(cmds12[0]?.content || '');
+assert(parsed12?.agentId === 'verifyfix', 'Agent ID should be verifyfix');
+assert(parsed12?.message?.includes('Báo TASK REPORT kết luận 100% PASS toàn diện.'), 'Message with closing bracket inside text must be preserved');
+
+console.log('\n===============================================================');
+console.log(`KẾT QUẢ KIỂM THỬ: ${passed} PASSED, ${failed} FAILED`);
+console.log('===============================================================');

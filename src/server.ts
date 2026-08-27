@@ -1431,17 +1431,6 @@ function stripCommandTags(text: string): string {
 
 function parseTalkTag(tagContent: string): { agentId: string; message: string; task?: string } | null {
   if (!tagContent) return null;
-  
-  const paramRe = /\b(agent-id|agent_id|target-id|target_id|target|agent|to|id|message|msg|content|task)\s*=\s*/gi;
-  const found: Array<{ key: string; keyStart: number; valueStart: number }> = [];
-  let pm: RegExpExecArray | null;
-  while ((pm = paramRe.exec(tagContent)) !== null) {
-    const before = tagContent.substring(0, pm.index);
-    const inDouble = ((before.match(/"/g) || []).length % 2) === 1;
-    const inSingle = ((before.match(/'/g) || []).length % 2) === 1;
-    if (inDouble || inSingle) continue;
-    found.push({ key: (pm[1] ?? "").toLowerCase(), keyStart: pm.index, valueStart: pm.index + pm[0].length });
-  }
 
   const stripQuotes = (v: string): string => {
     let t = v.trim();
@@ -1464,18 +1453,28 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
     return t;
   };
 
-  const valueOf = (keys: string[]): string | undefined => {
-    const p = found.find(f => keys.includes(f.key));
-    if (!p) return undefined;
-    const idx = found.indexOf(p);
-    const end = idx + 1 < found.length ? found[idx + 1].keyStart : tagContent.length;
-    return stripQuotes(tagContent.substring(p.valueStart, end));
-  };
+  // 1. Trích xuất target/agent-id trước
+  const targetMatch = tagContent.match(/(?:agent-id|agent_id|target-id|target_id|target|agent|to|id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s\]]+))/i);
+  const rawId = targetMatch ? (targetMatch[1] || targetMatch[2] || targetMatch[3] || targetMatch[4]) : '';
+  const agentId = cleanTargetIdentifier(rawId);
+  if (!agentId) return null;
 
-  const rawId = valueOf(["agent-id", "agent_id", "target-id", "target_id", "target", "agent", "to", "id"]);
-  const agentId = cleanTargetIdentifier(rawId || "");
-  const message = valueOf(["message", "msg", "content"]);
-  const task = valueOf(["task"]);
+  // 2. Trích xuất task nếu có (ưu tiên nếu task= đứng trước message=)
+  let task: string | undefined = undefined;
+  const taskParamMatch = tagContent.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s\]\n]+))/i);
+  if (taskParamMatch) {
+    const rawTask = taskParamMatch[1] || taskParamMatch[2] || taskParamMatch[3] || taskParamMatch[4] || '';
+    if (rawTask) task = stripQuotes(rawTask);
+  }
+
+  // 3. Trích xuất message: lấy toàn bộ nội dung từ sau 'message=' (hoặc 'msg=' hoặc 'content=')
+  const msgMarkerMatch = tagContent.match(/\b(message|msg|content)\s*=\s*/i);
+  let message: string | undefined = undefined;
+  if (msgMarkerMatch && msgMarkerMatch.index !== undefined) {
+    const msgStart = msgMarkerMatch.index + msgMarkerMatch[0].length;
+    const rawMsg = tagContent.substring(msgStart);
+    message = stripQuotes(rawMsg);
+  }
 
   const finalMessage = (message && message.trim()) || (task && task.trim());
   if (agentId && finalMessage) {
