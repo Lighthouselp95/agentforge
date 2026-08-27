@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { spawn, ChildProcess } from 'child_process';
 import net from 'net';
 import http from 'http';
@@ -84,65 +84,95 @@ function waitForServer(port: number, timeoutMs: number = 30000): Promise<boolean
   });
 }
 
-// Tìm executable hoặc script backend phù hợp
-function findBackendRunner(): { cmd: string; args: string[]; env?: Record<string, string>; cwd: string } | null {
+// Khởi chạy server: Chạy trực tiếp in-process (Packaged) hoặc spawn tsx (Dev)
+async function startServerInProcessOrDev(): Promise<void> {
   const projectRoot = getProjectRoot();
+  process.env.PORT = String(SERVER_PORT);
 
-  // 1. Kiểm tra binary standalone agentforge-web.exe (Ưu tiên số 1 cho packaged / portable)
-  const candidateExePaths = [
-    path.join(process.resourcesPath, 'agentforge-web.exe'),
-    path.join(process.resourcesPath, 'app', 'agentforge-web.exe'),
-    path.join(path.dirname(process.execPath), 'agentforge-web.exe'),
-    path.join(process.cwd(), 'release', 'agentforge-web.exe'),
-    path.join(process.cwd(), 'agentforge-web.exe')
-  ];
+  // 1. Packaged Mode: Import và chạy trực tiếp IN-PROCESS trong Electron main process
+  if (!isDev()) {
+    console.log(`[Electron] Packaged mode: Starting backend IN-PROCESS on port ${SERVER_PORT}...`);
+    const candidateServerPaths = [
+      path.join(__dirname, '..', 'dist', 'server.js'),
+      path.join(__dirname, 'server.js'),
+      path.join(process.resourcesPath, 'app.asar', 'dist', 'server.js'),
+      path.join(process.resourcesPath, 'app', 'dist', 'server.js'),
+      path.join(projectRoot, 'dist', 'server.js')
+    ];
 
-  for (const exePath of candidateExePaths) {
-    if (fs.existsSync(exePath)) {
-      console.log(`[Electron] Found standalone backend binary: ${exePath}`);
-      return {
-        cmd: exePath,
-        args: [],
-        cwd: path.dirname(exePath)
-      };
+    let loaded = false;
+    for (const sPath of candidateServerPaths) {
+      if (fs.existsSync(sPath)) {
+        try {
+          console.log(`[Electron] Dynamic importing backend from: ${sPath}`);
+          const fileUrl = pathToFileURL(sPath).href;
+          await import(fileUrl);
+          console.log(`[Electron] Backend server loaded and running in-process on port ${SERVER_PORT}`);
+          loaded = true;
+          break;
+        } catch (err: any) {
+          console.error(`[Electron] Failed to import backend from ${sPath}:`, err?.message || err);
+        }
+      }
     }
+
+    if (!loaded) {
+      // Fallback: thử import tương đối trực tiếp
+      try {
+        console.log(`[Electron] Fallback importing '../dist/server.js'...`);
+        await import('../dist/server.js' as any);
+        console.log(`[Electron] Backend server loaded via fallback relative import on port ${SERVER_PORT}`);
+      } catch (err: any) {
+        console.error('[Electron] Fallback in-process backend import failed:', err?.message || err);
+      }
+    }
+    return;
   }
 
-  // 2. Dev mode: dùng tsx nếu có
-  if (isDev()) {
-    const tsxBin = path.join(projectRoot, 'node_modules', '.bin', 'tsx');
-    if (fs.existsSync(tsxBin) || fs.existsSync(tsxBin + '.cmd')) {
-      return {
-        cmd: process.platform === 'win32' ? (fs.existsSync(tsxBin + '.cmd') ? tsxBin + '.cmd' : 'cmd.exe') : tsxBin,
-        args: process.platform === 'win32' && !fs.existsSync(tsxBin + '.cmd') ? ['/c', 'npx', 'tsx', 'src/server.ts'] : ['src/server.ts'],
-        cwd: projectRoot
-      };
+  // 2. Development Mode: Spawn tsx src/server.ts nếu đang phát triển
+  console.log(`[Electron] Dev mode: Starting backend server on port ${SERVER_PORT}...`);
+  const tsxBin = path.join(projectRoot, 'node_modules', '.bin', 'tsx');
+  const hasTsx = fs.existsSync(tsxBin) || fs.existsSync(tsxBin + '.cmd');
+
+  if (hasTsx) {
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? (fs.existsSync(tsxBin + '.cmd') ? tsxBin + '.cmd' : 'cmd.exe') : tsxBin;
+    const args = isWin && !fs.existsSync(tsxBin + '.cmd') ? ['/c', 'npx', 'tsx', 'src/server.ts'] : ['src/server.ts'];
+
+    try {
+      serverProcess = spawn(cmd, args, {
+        cwd: projectRoot,
+        env: { ...process.env, PORT: String(SERVER_PORT) },
+        stdio: 'pipe',
+        windowsHide: true
+      });
+
+      serverProcess.stdout?.on('data', (d) => console.log(`[Server] ${d.toString().trim()}`));
+      serverProcess.stderr?.on('data', (d) => console.error(`[Server] ${d.toString().trim()}`));
+      serverProcess.on('error', (err) => {
+        console.error('[Electron] Dev server spawn error:', err.message);
+        serverProcess = null;
+      });
+      serverProcess.on('exit', (code) => {
+        console.log(`[Electron] Dev server exited (code ${code})`);
+        serverProcess = null;
+      });
+    } catch (e: any) {
+      console.error('[Electron] Failed to spawn dev server:', e?.message || e);
+    }
+  } else {
+    // Dev fallback: in-process import
+    try {
+      const serverPath = path.join(projectRoot, 'dist', 'server.js');
+      if (fs.existsSync(serverPath)) {
+        await import(pathToFileURL(serverPath).href);
+      } else {
+        await import('../dist/server.js' as any);
+      }
+    } catch (e: any) {
+      console.error('[Electron] Dev fallback in-process import error:', e?.message || e);
     }
   }
-
-  // 3. Packaged mode hoặc Fallback Node runtime: dùng ELECTRON_RUN_AS_NODE=1
-  // Trong Electron packaged, process.execPath + ELECTRON_RUN_AS_NODE=1 hoạt động như node.exe độc lập
-  const candidateJsPaths = [
-    path.join(__dirname, '..', 'dist', 'server.js'),
-    path.join(__dirname, 'server.js'),
-    path.join(process.resourcesPath, 'app.asar', 'dist', 'server.js'),
-    path.join(process.resourcesPath, 'app', 'dist', 'server.js'),
-    path.join(projectRoot, 'dist', 'server.js')
-  ];
-
-  for (const jsPath of candidateJsPaths) {
-    if (fs.existsSync(jsPath)) {
-      console.log(`[Electron] Using server script with ELECTRON_RUN_AS_NODE: ${jsPath}`);
-      return {
-        cmd: process.execPath,
-        args: [jsPath],
-        env: { ELECTRON_RUN_AS_NODE: '1' },
-        cwd: projectRoot
-      };
-    }
-  }
-
-  return null;
 }
 
 async function ensureServerRunning(): Promise<void> {
@@ -151,48 +181,11 @@ async function ensureServerRunning(): Promise<void> {
   SERVER_PORT = resolvedPort;
 
   if (alreadyRunning) {
-    console.log(`[Electron] Port ${SERVER_PORT} already running our server — reusing existing.`);
+    console.log(`[Electron] Port ${SERVER_PORT} already active — reusing existing.`);
     return;
   }
 
-  console.log(`[Electron] Starting backend server on port ${SERVER_PORT}...`);
-
-  const runner = findBackendRunner();
-  if (!runner) {
-    console.warn('[Electron] Could not locate backend binary or script. Server might need manual launch.');
-    return;
-  }
-
-  try {
-    const spawnEnv = {
-      ...process.env,
-      PORT: String(SERVER_PORT),
-      ...(runner.env || {})
-    };
-
-    serverProcess = spawn(runner.cmd, runner.args, {
-      cwd: runner.cwd,
-      env: spawnEnv,
-      stdio: 'pipe',
-      windowsHide: true
-    });
-
-    serverProcess.stdout?.on('data', (d) => console.log(`[Server] ${d.toString().trim()}`));
-    serverProcess.stderr?.on('data', (d) => console.error(`[Server] ${d.toString().trim()}`));
-
-    serverProcess.on('error', (err) => {
-      console.error('[Electron] Failed to start backend subprocess:', err.message);
-      serverProcess = null;
-    });
-
-    serverProcess.on('exit', (code) => {
-      console.log(`[Electron] Server exited (code ${code})`);
-      serverProcess = null;
-    });
-  } catch (err: any) {
-    console.error('[Electron] Exception while spawning server process:', err?.message || err);
-    serverProcess = null;
-  }
+  await startServerInProcessOrDev();
 }
 
 // ========== WINDOW ==========
@@ -238,7 +231,7 @@ function createWindow(): void {
 // ========== CLEANUP ==========
 function cleanup(): void {
   if (serverProcess) {
-    console.log('[Electron] Shutting down backend server...');
+    console.log('[Electron] Shutting down backend server process...');
     try {
       if (process.platform === 'win32' && serverProcess.pid) {
         spawn('taskkill', ['/pid', serverProcess.pid.toString(), '/f', '/t'], { stdio: 'ignore' });
@@ -259,7 +252,7 @@ function cleanup(): void {
 app.on('ready', async () => {
   console.log(`[Electron] Mode: ${isDev() ? 'development' : 'production'}`);
 
-  // 1. Ensure backend is running
+  // 1. Ensure backend is running (in-process for packaged)
   await ensureServerRunning();
 
   // 2. Wait until backend responds
