@@ -862,10 +862,7 @@ export function App() {
                     fontWeight: 500,
                     color: '#93c5fd',
                     cursor: 'pointer',
-                    maxWidth: 260,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    wordBreak: 'break-all',
                     transition: 'background 0.15s',
                     lineHeight: '18px'
                   }}
