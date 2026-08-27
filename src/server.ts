@@ -793,7 +793,9 @@ function buildTeam(agentId: string, full: boolean = true): string {
   lines.push('\nMembers:');
   others.forEach(a => {
     const wt = a.workingSince ? ` (${Math.round((Date.now() - a.workingSince) / 1000)}s working)` : '';
-    const taskInfo = a.task ? ` | Task: ${a.task.normalize('NFC')}` : '';
+    // Rút gọn task tối đa 80 ký tự để tránh phình context payload
+    const rawTask = a.task ? a.task.normalize('NFC').replace(/\s+/g, ' ').trim() : '';
+    const taskInfo = rawTask ? ` | Task: ${rawTask.length > 80 ? rawTask.slice(0, 77) + '...' : rawTask}` : '';
     lines.push(`  - ${a.name} (${a.role}) [${a.status}]${taskInfo}${wt} | ID: ${a.id}`);
   });
   return (lines.join('\n') + (self?.sessionId ? '' : suffix)).normalize('NFC');
@@ -1442,7 +1444,7 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
   }
 
   const stripQuotes = (v: string): string => {
-    const t = v.trim();
+    let t = v.trim();
     if (t.length >= 2 &&
         ((t.startsWith('"') && t.endsWith('"')) ||
          (t.startsWith("'") && t.endsWith("'")) ||
@@ -1454,6 +1456,10 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
       const lastQuote = t.lastIndexOf(closingQuote);
       if (lastQuote > 0) return t.substring(1, lastQuote).trim();
       return t.substring(1).trim();
+    }
+    // Nếu message không dùng quote mà bị dính dấu ] đóng tag ở cuối chuỗi do lồng ký tự [
+    if (t.endsWith(']')) {
+      t = t.substring(0, t.length - 1).trim();
     }
     return t;
   };
@@ -1479,8 +1485,8 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
   return null;
 }
 
-function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): { to: string; message: string }[] {
-  const matches: { to: string; message: string }[] = [];
+function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): { to: string; message: string; task?: string }[] {
+  const matches: { to: string; message: string; task?: string }[] = [];
   if (!content) return matches;
 
   // Extract [TALK ...] commands
@@ -1496,7 +1502,7 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
       const found = findAgentByIdNameOrRole(cleanTo);
       resolvedTo = found ? found.id : cleanTo;
     }
-    matches.push({ to: resolvedTo, message: talk.message });
+    matches.push({ to: resolvedTo, message: talk.message, task: (talk as any).task });
   }
 
   const cleanContent = stripCommandTags(content);
@@ -1943,7 +1949,7 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
           targetAgent.workingSince = Date.now();
           storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
           broadcast('agent:updated', { agent: targetAgent });
-          deliverTalk(targetAgent, fromAgent, { to: resolvedTo, message: msg.message });
+          deliverTalk(targetAgent, fromAgent, { to: resolvedTo, message: msg.message, task: msg.task });
         }
       } else {
         if (msg.to !== 'user' && msg.to !== 'orchestrator' && msg.to !== 'broadcast') {
@@ -1987,7 +1993,7 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
 
 // Gửi tin nhắn TALK từ fromAgent → targetAgent, bền vững qua outbox.
 // existingReportId dùng khi replay để không sinh bản trùng.
-async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: string; message: string }, existingReportId?: string) {
+async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: string; message: string; task?: string }, existingReportId?: string) {
   const reportId = existingReportId || uuidv4();
   if (!existingReportId) {
     storage.enqueueOutbox({
@@ -2007,12 +2013,18 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
     const needReinject = tc.getNeedPromptReinject() || !targetAgent.sessionId;
     if (needReinject) tc.setNeedPromptReinject(false);
 
-    // Cập nhật task cho targetAgent nếu tin nhắn đến từ Orchestrator
-    if (fromAgent.role === 'orchestrator' || fromAgent.id === 'orchestrator' || fromAgent.type === 'orchestrator') {
+    // Cập nhật task cho targetAgent nếu có task tường minh hoặc tin nhắn từ Orchestrator
+    const explicitTask = msg.task && msg.task.trim() ? msg.task.trim() : '';
+    if (explicitTask) {
+      targetAgent.task = explicitTask;
+      storage.updateAgent(targetAgent.id, { task: explicitTask } as any);
+      broadcast('agent:updated', { agent: targetAgent });
+    } else if (fromAgent.role === 'orchestrator' || fromAgent.id === 'orchestrator' || fromAgent.type === 'orchestrator') {
       const trimmedTask = msg.message.trim();
-      if (trimmedTask) {
+      if (trimmedTask && trimmedTask.length < 300) {
         targetAgent.task = trimmedTask;
         storage.updateAgent(targetAgent.id, { task: trimmedTask } as any);
+        broadcast('agent:updated', { agent: targetAgent });
       }
     }
 
