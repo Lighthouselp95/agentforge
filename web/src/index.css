@@ -1,0 +1,341 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root,
+html[data-theme='dark'] {
+  /* ===== Design Tokens — DARK (Deep Obsidian) ===== */
+  --bg-main: #090d16;
+  --bg-panel: #0f172a;
+  --bg-inset: #111827;
+  --bg-input: #131c2e;
+  --bg-card: #101726;
+  --bg-card-active: #172036;
+  --af-border: rgba(148, 163, 184, 0.12);
+  --af-border-strong: rgba(148, 163, 184, 0.22);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --accent-soft: rgba(59, 130, 246, 0.14);
+  --shadow-panel: 0 8px 24px rgba(2, 6, 23, 0.35);
+  --shadow-pop: 0 16px 48px rgba(2, 6, 23, 0.5);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --report-label: #fde047;
+
+  /* Legacy aliases (giữ tương thích biến cũ trong codebase) */
+  --bg-primary: var(--bg-main);
+  --bg-secondary: var(--bg-panel);
+  --bg-tertiary: var(--bg-inset);
+  --bg-card-hover: #334155;
+  --border-focus: #3b82f6;
+}
+
+html[data-theme='light'] {
+  /* ===== Design Tokens — LIGHT (Off-White, high contrast) ===== */
+  --bg-main: #f8fafc;
+  --bg-panel: #ffffff;
+  --bg-inset: #f1f5f9;
+  --bg-input: #ffffff;
+  --bg-card: #f1f5f9;
+  --bg-card-active: #eef4ff;
+  --af-border: #e2e8f0;
+  --af-border-strong: rgba(15, 23, 42, 0.16);
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.10);
+  --shadow-panel: 0 8px 24px rgba(15, 23, 42, 0.06);
+  --shadow-pop: 0 16px 48px rgba(15, 23, 42, 0.12);
+  --report-label: #b45309;
+
+  /* Legacy aliases */
+  --bg-primary: var(--bg-main);
+  --bg-secondary: var(--bg-panel);
+  --bg-tertiary: var(--bg-inset);
+  --bg-card: var(--bg-card);
+  --bg-card-hover: #e2e8f0;
+  --border-color: var(--af-border);
+  --border-focus: var(--accent);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Mobile: neo đúng viewport động (thanh address bar ẩn/hiện), chống tràn trang */
+html, body, #root {
+  height: 100%;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Custom Sleek Scrollbar — siêu mỏng 4px */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+
+/* Status Pulsing Animations */
+@keyframes pulse-glow-green {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6), 0 0 8px rgba(34, 197, 94, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0), 0 0 14px rgba(34, 197, 94, 0.8);
+  }
+}
+
+@keyframes pulse-glow-blue {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6), 0 0 8px rgba(59, 130, 246, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(59, 130, 246, 0), 0 0 14px rgba(59, 130, 246, 0.8);
+  }
+}
+
+@keyframes pulse-glow-red {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+  }
+}
+
+.pulsing-green {
+  animation: pulse-glow-green 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+.pulsing-blue {
+  animation: pulse-glow-blue 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+.pulsing-red {
+  animation: pulse-glow-red 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.25s ease-out forwards;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin-icon {
+  animation: spin 1.2s linear infinite;
+}
+
+/* Button & Card interactive transitions */
+.interactive-card {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.interactive-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(99, 102, 241, 0.5) !important;
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(99, 102, 241, 0.2);
+}
+
+.glass-panel {
+  background: rgba(30, 41, 59, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ============ THEME LIGHT/DARK ============ */
+/* Dark = mặc định hiện tại. Light: hiện đại tối giản, nền trắng, viền mảnh, ít bóng. */
+html[data-theme='light'] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #eef2f7;
+  --bg-card: #ffffff;
+  --border-color: rgba(15, 23, 42, 0.08);
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+}
+
+html[data-theme='light'] body {
+  background-color: #ffffff;
+}
+
+/* --- Override surface có inline-style cứng bằng !important qua hook class --- */
+html[data-theme='light'] .af-shell {
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+html[data-theme='light'] .af-sidebar {
+  background: #f8fafc !important;
+  border-right-color: rgba(15, 23, 42, 0.08) !important;
+}
+html[data-theme='light'] .af-resizer {
+  background: rgba(15, 23, 42, 0.06) !important;
+}
+html[data-theme='light'] .af-chatpanel {
+  background: #ffffff !important;
+}
+html[data-theme='light'] .af-chat-header {
+  background: #f8fafc !important;
+  border-bottom-color: rgba(15, 23, 42, 0.08) !important;
+}
+html[data-theme='light'] .af-chat-title {
+  color: #0f172a !important;
+}
+html[data-theme='light'] .af-chat-scroll {
+  background: #ffffff !important;
+}
+html[data-theme='light'] .af-chat-input {
+  background: #f8fafc !important;
+  border-top-color: rgba(15, 23, 42, 0.08) !important;
+}
+html[data-theme='light'] .af-chat-input textarea {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+/* Dialogs */
+html[data-theme='light'] .af-overlay {
+  background: rgba(15, 23, 42, 0.35) !important;
+}
+html[data-theme='light'] .af-dialog-box {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.10) !important;
+}
+html[data-theme='light'] .af-card {
+  background: #ffffff !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Dashboard (light) */
+html[data-theme='light'] .af-dashboard {
+  color: #0f172a;
+}
+html[data-theme='light'] .af-card {
+  background: #ffffff !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Offline connection badge — hiệu ứng cảnh báo nhẹ */
+@keyframes af-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.af-conn-badge-off {
+  animation: af-blink 1.6s ease-in-out infinite;
+}
+
+/* Chat bubbles (light): mọi bubble về trắng, chữ tối; user bubble giữ accent xanh */
+html[data-theme='light'] .af-bubble {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+}
+html[data-theme='light'] .af-bubble-user {
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%) !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+
+/* ToolCallBlock (light) */
+html[data-theme='light'] .af-toolblock {
+  background: #f8fafc !important;
+  border-color: rgba(15, 23, 42, 0.10) !important;
+}
+html[data-theme='light'] .af-toolblock-head {
+  background: #eef2f7 !important;
+  border-bottom-color: rgba(15, 23, 42, 0.08) !important;
+}
+html[data-theme='light'] .af-toolblock-body {
+  color: #334155 !important;
+}
+html[data-theme='light'] .af-thinking {
+  background: #f8fafc !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* ============ MODERN MINIMALIST MOTION & ELEVATION ============ */
+.af-shell,
+.af-sidebar,
+.af-chatpanel,
+.af-chat-header,
+.af-chat-input,
+.af-bubble,
+.af-toolblock,
+.af-thinking,
+.af-card,
+.af-dialog-box,
+.af-resizer {
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.af-elevate {
+  box-shadow: var(--shadow-panel);
+}
+.af-pop {
+  box-shadow: var(--shadow-pop);
+}
+
+/* Sidebar: pulse nhe khi agent dang working */
+@keyframes af-working-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); border-color: var(--af-border); }
+  50% { box-shadow: 0 0 14px 2px var(--accent-soft); border-color: var(--accent); }
+}
+.af-card.af-working {
+  animation: af-working-pulse 2.4s ease-in-out infinite;
+}

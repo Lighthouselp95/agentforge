@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+web/node_modules/
+.pnpm-store/
+
+# Build outputs & Bundles
+dist/
+dist-electron/
+release/
+web/dist/
+*.blob
+*.exe
+*.dll
+*.node
+*.asar
+
+# Runtime data & Local databases
+data/
+*.db
+*.sqlite
+*.sqlite3
+scraper.db
+
+# OpenCode & Agent internal caches/sessions
+.opencode/
+__pycache__/
+.pytest_cache/
+
+# Backups & Temporary files
+backups/
+*.bak
+*.bak_*
+*.tmp
+*.temp
+data/tmp/
+
+# Logs
+*.log
+*.err
+server.log
+server.err
+web.log
+web.err
+web.err.log
+sea-smoke.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+*.lnk
+.vscode/
+.idea/
