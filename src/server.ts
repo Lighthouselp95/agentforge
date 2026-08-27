@@ -116,9 +116,10 @@ You MUST use these exact tags in your response:
 3. Run independent tasks in parallel (spawn multiple agents at once)
 4. Each agent name = 1 unique agent ID. If you SPAWN a name that already exists, the agent is REUSED (keeps ID + session + context). The old agent gets a new task.
 5. Orchestrator TUYỆT ĐỐI KHÔNG được xóa agent. Khi một agent không còn cần thiết, bị lỗi hoặc kẹt, Orchestrator chỉ được [STOP] agent và báo cáo/đề xuất User xóa agent trên giao diện.
-6. Spawning limit restrictions are completely removed. The Orchestrator has full autonomy to spawn as many specialized agents as needed to complete the task efficiently.
-7. RESEARCH FIRST RULE: Before implementing any changes, fixing bugs, or writing code, you MUST first research the codebase, read the relevant files, check documentation, or search online resources to gather context and understand the implementation details.
-8. Monitor progress — if an agent works > 3 minutes, use TALK to ask for status
+6. Instance limit rules by role: coder role is limited to a maximum of 4 active instances. All other roles (researcher, verifier, tester, reviewer, docs, planner, debugger, searcher, idea) are limited to a maximum of 2 active instances. Custom roles default to a maximum of 2 active instances.
+7. Reuse and communication rules: When an agent already exists or the role instance limit has been reached, the Orchestrator BẮT BUỘC PHẢI DÙNG [TALK agent-id=... message=...] command để giao tiếp hoặc phân công nhiệm vụ mới thay vì cố gắng [SPAWN] thêm instance mới. Khi nhận thông báo [Role Limit] từ hệ thống, lập tức chuyển sang dùng [TALK] với một trong các agent hiện có thuộc role đó.
+8. RESEARCH FIRST RULE: Before implementing any changes, fixing bugs, or writing code, you MUST first research the codebase, read the relevant files, check documentation, or search online resources to gather context and understand the implementation details.
+9. Monitor progress — if an agent works > 3 minutes, use TALK to ask for status
 9. If an agent is stuck, STOP it then RESUME with clearer instructions
 10. When all agents report back, summarize results to the user
 11. NEVER do the coding work yourself — delegate to specialist agents
@@ -315,28 +316,8 @@ const MAX_HISTORY = MAX_PERSISTED_MESSAGES; // lưu bền vững ≥15.000 tin (
 // Abort idempotency guards — prevent multiple concurrent aborts for same agent
 const abortingAgents = new Set<string>();
 
-// ============ WORKER WATCHDOG ============
-// Agent timeout thresholds (ms)
-const AGENT_WORK_TIMEOUT_MS = parseInt(process.env.AGENTFORGE_WORK_TIMEOUT || '180000', 10); // 3 min default
-const AGENT_STALE_CHECK_INTERVAL_MS = 30000; // Check every 30s
-const MAX_RETRIES_PER_TASK = 2; // Max auto-retries per task
-
 // Track per-agent retry counts
 const agentRetryCount = new Map<string, number>();
-
-let watchdogTimer: ReturnType<typeof setInterval> | null = null;
-
-interface WatchdogState {
-  checkCount: Map<string, number>;      // agentId -> number of times flagged stuck
-  lastTalkTime: Map<string, number>;    // agentId -> timestamp of last TALK sent
-  awaitingTalkResponse: Set<string>;    // agentIds waiting for TALK response
-}
-
-const watchdogState: WatchdogState = {
-  checkCount: new Map(),
-  lastTalkTime: new Map(),
-  awaitingTalkResponse: new Set(),
-};
 
 // ============ CUSTOM ROLES ============
 const AGENTS_DIR = join(SERVER_PROJECT_ROOT, '.opencode', 'agents');
@@ -969,12 +950,7 @@ async function deleteAgent(id: string): Promise<boolean> {
   unreadForOrchestrator.push(...remainingUnread);
   agentRetryCount.delete(id);
 
-  // 7. Xóa sạch watchdog state
-  watchdogState.checkCount.delete(id);
-  watchdogState.lastTalkTime.delete(id);
-  watchdogState.awaitingTalkResponse.delete(id);
-
-  // 8. Xóa toàn bộ agent khỏi Database storage
+  // 7. Xóa toàn bộ agent khỏi Database storage
   storage.deleteAgent(id);
 
   // 9. Xóa khỏi memory map
@@ -1202,226 +1178,12 @@ function startTitlePoller() {
   }, 10000); // every 10 seconds
 }
 
-// ============ UNIFIED WORKER WATCHDOG ============
-// Heartbeat interval: 180s (3 minutes), stuck timeout threshold: 600s (10 minutes)
-const WORKER_WATCHDOG_CONFIG = {
-  checkIntervalMs: 180000,       // check every 180s (3 minutes)
-  stuckThresholdMs: 600000,      // 600s (10 minutes) before intervention
-  maxRetries: 2,                 // max auto-recovery attempts
-  talkTimeoutMs: 45000,          // wait 45s for TALK response
-};
-
+// Watchdog / auto-timeout has been disabled: agents only stop on explicit command from User or Orchestrator.
 function isWatchdogEnabled(): boolean {
-  return storage.getSetting('enableWatchdog', true) !== false;
+  return false;
 }
-
 function startWorkerWatchdog() {
-  if (watchdogTimer) clearInterval(watchdogTimer);
-  watchdogTimer = setInterval(async () => {
-    if (!isWatchdogEnabled()) return;
-    const now = Date.now();
-    
-    for (const [id, agent] of agents) {
-      // Only monitor worker agents (not orchestrator) that are in "working" state
-      if (agent.type === 'orchestrator' || agent.status !== 'working' || !agent.workingSince) {
-        continue;
-      }
-
-      const workingDuration = now - agent.workingSince;
-      
-      // Check if agent is working beyond 4 minutes
-      if (workingDuration >= WORKER_WATCHDOG_CONFIG.stuckThresholdMs) {
-        const checkCount = watchdogState.checkCount.get(id) || 0;
-        
-        // First time flagged: send TALK to check status
-        if (checkCount === 0 && !watchdogState.awaitingTalkResponse.has(id)) {
-          watchdogState.checkCount.set(id, 1);
-          watchdogState.lastTalkTime.set(id, now);
-          watchdogState.awaitingTalkResponse.add(id);
-          
-          console.log(`[Watchdog] Agent ${agent.name} (${id}) working for ${Math.round(workingDuration/1000)}s — checking status`);
-          
-          try {
-            const client = getClient(agent);
-            const needReinject = client.getNeedPromptReinject() || !agent.sessionId;
-            if (needReinject) client.setNeedPromptReinject(false);
-            const team = buildTeam(agent.id);
-            const statusPrompt = `=== SYSTEM STATUS CHECK ===
-You have been working for ${Math.round(workingDuration/1000)}s. Please provide a brief status update:
-- If working normally: reply with [TO: orchestrator] PROGRESS: <what you are doing>
-- If stuck/blocked: reply with [TO: orchestrator] STUCK: <reason>
-- If done: reply with [TO: orchestrator] Task complete. === TASK REPORT === ...
-
-${buildWorkerPrompt(agent.role, agent, !agent.sessionId || needReinject)}`;
-            
-            const prompt = (agent.sessionId && !needReinject) ? `[TEAM UPDATE]\n${team}\n\n${statusPrompt}` : `[TASK] ${agent.task || 'General task'}\n[TEAM]\n${team}\n[/TEAM]\n\n${statusPrompt}`;
-            const tr = await client.chat(prompt);
-            // Nếu user tắt watchdog trong lúc await opencode → đừng bắn report/status nữa
-            if (!isWatchdogEnabled()) { watchdogState.checkCount.delete(id); watchdogState.awaitingTalkResponse.delete(id); return; }
-            agent.sessionId = client.getSessionId() || agent.sessionId;
-            await parseAgentCommands(tr.content, agent.id);
-            
-            const msg: ChatMsg = { id: uuidv4(), from: agent.id, to: 'orchestrator', content: tr.content, timestamp: now, agentName: agent.name, agentRole: agent.role };
-            chatHistory.push(msg); storage.saveMessage({ ...msg, msgType: 'status' });
-            broadcast('chat:message', { msg });
-            saveTranscript(tr, agent.id, agent.name, agent.role);
-            
-            if (/STATUS:\s*(completed|done|finished)/i.test(String(tr.content || '')) || String(tr.content || '').toLowerCase().includes('task complete')) {
-              // PROCESS-AUTHORITATIVE: timer KHÔNG tự đè status='idle' —
-              // idle chỉ đến từ luồng enqueue thật kết thúc (proc.on('close')).
-              watchdogState.checkCount.delete(id);
-              watchdogState.awaitingTalkResponse.delete(id);
-              checkAndSynthesize(agent.id);
-            } else if (String(tr.content || '').toLowerCase().includes('stuck') || String(tr.content || '').toLowerCase().includes('cannot complete')) {
-              watchdogState.awaitingTalkResponse.delete(id);
-              await handleStuckAgent(id, agent, tr.content);
-            } else {
-              watchdogState.awaitingTalkResponse.delete(id);
-              storage.updateAgent(agent.id, { status: agent.status, sessionId: agent.sessionId, workingSince: agent.workingSince || null });
-              broadcast('agent:updated', { agent });
-            }
-          } catch (e: any) {
-            console.log(`[Watchdog] Status check to ${agent.name} failed: ${e.message}`);
-            watchdogState.awaitingTalkResponse.delete(id);
-            await handleStuckAgent(id, agent, `Communication failed: ${e.message}`);
-          }
-        }
-        // Subsequent checks: if still stuck after TALK, auto-recover
-        else if (checkCount > 0) {
-          const lastTalk = watchdogState.lastTalkTime.get(id) || 0;
-          const timeSinceTalk = now - lastTalk;
-          
-          if (watchdogState.awaitingTalkResponse.has(id) && timeSinceTalk >= WORKER_WATCHDOG_CONFIG.talkTimeoutMs) {
-            console.log(`[Watchdog] Agent ${agent.name} did not respond within ${WORKER_WATCHDOG_CONFIG.talkTimeoutMs/1000}s`);
-            watchdogState.awaitingTalkResponse.delete(id);
-            await handleStuckAgent(id, agent, 'No response to status check');
-          }
-          else if (!watchdogState.awaitingTalkResponse.has(id) && workingDuration >= WORKER_WATCHDOG_CONFIG.stuckThresholdMs * (checkCount + 1)) {
-            if (checkCount < WORKER_WATCHDOG_CONFIG.maxRetries) {
-              watchdogState.checkCount.set(id, checkCount + 1);
-              watchdogState.lastTalkTime.set(id, now);
-              watchdogState.awaitingTalkResponse.add(id);
-              
-              console.log(`[Watchdog] Agent ${agent.name} still working after ${checkCount} check(s) — sending recovery prompt`);
-              
-              try {
-                const client = getClient(agent);
-                const needReinject = client.getNeedPromptReinject() || !agent.sessionId;
-                if (needReinject) client.setNeedPromptReinject(false);
-                const retryPrompt = `=== RECOVERY ATTEMPT ${checkCount + 1}/${WORKER_WATCHDOG_CONFIG.maxRetries} ===
-You were previously asked for status but appear to still be stuck on: ${agent.task || 'unknown task'}
-
-Please either:
-1. Complete the task and report with: [TO: orchestrator] Task complete. === TASK REPORT === ...
-2. Report what's blocking you: [TO: orchestrator] STUCK: [specific reason]
-
-Respond now with your status.
-
-${buildWorkerPrompt(agent.role, agent, !agent.sessionId || needReinject)}`;
-                
-                const tr = await client.enqueue(retryPrompt);
-                if (!isWatchdogEnabled()) { watchdogState.checkCount.delete(id); watchdogState.awaitingTalkResponse.delete(id); return; }
-
-                if (String(tr.content || '').toLowerCase().includes('stuck') || 
-                    String(tr.content || '').toLowerCase().includes('cannot complete')) {
-                  await handleStuckAgent(id, agent, tr.content);
-                } else if (String(tr.content || '').toLowerCase().includes('task complete') || 
-                           String(tr.content || '').toLowerCase().includes('=== task report ===')) {
-                  // PROCESS-AUTHORITATIVE: không tự đè idle từ timer
-                  watchdogState.checkCount.delete(id);
-                  watchdogState.awaitingTalkResponse.delete(id);
-                  checkAndSynthesize(agent.id);
-                } else {
-                  watchdogState.awaitingTalkResponse.delete(id);
-                }
-              } catch (e: any) {
-                watchdogState.awaitingTalkResponse.delete(id);
-                await handleStuckAgent(id, agent, `Recovery failed: ${e.message}`);
-              }
-            } else {
-              // Max retries exceeded - force stop and report to orchestrator
-              console.log(`[Watchdog] Agent ${agent.name} exceeded max retries (${WORKER_WATCHDOG_CONFIG.maxRetries}) — forcing STOP and reporting to orchestrator`);
-              watchdogState.checkCount.delete(id);
-              watchdogState.awaitingTalkResponse.delete(id);
-              await forceStopAndReport(id, agent);
-            }
-          }
-        }
-      }
-      // Agent recovered (completed or errored) - clean up watchdog state
-      else if ((agent.status as any) === 'idle' || (agent.status as any) === 'error') {
-        watchdogState.checkCount.delete(id);
-        watchdogState.lastTalkTime.delete(id);
-        watchdogState.awaitingTalkResponse.delete(id);
-      }
-    }
-  }, WORKER_WATCHDOG_CONFIG.checkIntervalMs);
-}
-
-async function handleStuckAgent(agentId: string, agent: Agent, reason: string) {
-  if (!isWatchdogEnabled()) { watchdogState.checkCount.delete(agentId); watchdogState.awaitingTalkResponse.delete(agentId); return; }
-  console.log(`[Watchdog] Handling stuck agent ${agent.name}: ${reason}`);
-  
-  // STOP the agent
-  stopAgent(agentId);
-  
-  // Send error report to orchestrator
-  const errMsg: ChatMsg = {
-    id: uuidv4(),
-    from: agentId,
-    to: 'orchestrator',
-    content: `[WATCHDOG REPORT] Agent ${agent.name} (${agent.role}) was stuck for ${Math.round((Date.now() - (agent.workingSince || Date.now()))/1000)}s.\nReason: ${reason}\nTask: ${agent.task || 'none'}\nAction: Agent stopped. Awaiting orchestrator decision.`,
-    timestamp: Date.now(),
-    agentName: agent.name,
-    agentRole: agent.role
-  };
-  chatHistory.push(errMsg);
-  storage.saveMessage(errMsg);
-  addUnreadForOrchestrator(errMsg);
-  broadcast('chat:message', { msg: errMsg });
-  
-  // Trigger orchestrator to decide next action
-  await triggerOrchestrator(agent, errMsg.content);
-  
-  // Clean up watchdog state
-  watchdogState.checkCount.delete(agentId);
-  watchdogState.awaitingTalkResponse.delete(agentId);
-}
-
-async function forceStopAndReport(agentId: string, agent: Agent) {
-  if (!isWatchdogEnabled()) { watchdogState.checkCount.delete(agentId); watchdogState.awaitingTalkResponse.delete(agentId); return; }
-  console.log(`[Watchdog] Force stopping agent ${agent.name} (${agentId})`);
-  
-  // STOP the agent
-  stopAgent(agentId);
-  
-  // Force cleanup: abort any running opencode process
-  const client = clients.get(agentId);
-  if (client) {
-    client.abort();
-  }
-  
-  // Report to orchestrator
-  const errMsg: ChatMsg = {
-    id: uuidv4(),
-    from: agentId,
-    to: 'orchestrator',
-    content: `[WATCHDOG FORCE-STOP] Agent ${agent.name} (${agent.role}) exceeded max recovery attempts (${WORKER_WATCHDOG_CONFIG.maxRetries}).\nTask: ${agent.task || 'none'}\nAction: Agent forcibly stopped and removed from active pool.\nOrchestrator should decide: respawn with clearer task, reassign, or mark task failed.`,
-    timestamp: Date.now(),
-    agentName: agent.name,
-    agentRole: agent.role
-  };
-  chatHistory.push(errMsg);
-  storage.saveMessage(errMsg);
-  addUnreadForOrchestrator(errMsg);
-  broadcast('chat:message', { msg: errMsg });
-  
-  // Trigger orchestrator
-  await triggerOrchestrator(agent, errMsg.content);
-  
-  // Clean up watchdog state
-  watchdogState.checkCount.delete(agentId);
-  watchdogState.awaitingTalkResponse.delete(agentId);
+  // No-op: automatic timeout and auto-stop mechanisms removed
 }
 
 const INVALID_TARGET_PLACEHOLDERS = new Set([
@@ -1847,7 +1609,17 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
     }
   }
 
-  return matches;
+  // Deduplicate: nếu có 2 message cùng target + cùng nội dung → chỉ giữ 1
+  const seen = new Set<string>();
+  const deduped: typeof matches = [];
+  for (const m of matches) {
+    const key = `${m.to}|||${m.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(m);
+    }
+  }
+  return deduped;
 }
 
 // Strip code blocks and blockquotes to avoid parsing example tags as real commands
@@ -1937,16 +1709,6 @@ let lastOrchestratorMessageTime: number = 0;
 const ORCH_TRIGGER_DEBOUNCE_MS = 1500; // 1.5s debounce gom báo cáo từ nhiều worker
 const ORCH_DEDUPLICATION_WINDOW_MS = 15000; // 15s deduplication window
 const ORCH_MAX_RETRY = 5; // số lần retry in-session trước khi chờ restart replay
-// Chống spam report: lỗi Abort/"turn failed" không bao giờ phát lại; nội dung giống hệt trong 2s bị bỏ qua
-const REPORT_DEDUP_WINDOW_MS = 2000;
-const recentReportHashes = new Map<string, number>();
-function pruneRecentReportHashes() {
-  if (recentReportHashes.size < 500) return;
-  const now = Date.now();
-  for (const [h, t] of recentReportHashes) {
-    if (now - t > REPORT_DEDUP_WINDOW_MS * 4) recentReportHashes.delete(h);
-  }
-}
 const ABORT_ERROR_PATTERN = /Agent operation aborted by user|turn failed/i;
 // Auto-wakeup khi worker im lặng nhưng có tool_use thật: throttle 30s/agent chống loop
 const TOOL_WAKEUP_THROTTLE_MS = 30000;
@@ -2016,36 +1778,6 @@ async function processOrchestratorTriggerQueue() {
 
   const batch = pendingOrchTriggers.splice(0, pendingOrchTriggers.length);
   if (batch.length === 0) return;
-
-  // Lọc bỏ report rỗng/"(No response)" TRƯỚC khi dựng prompt: đánh dấu delivered để outbox
-  // không replay vô hạn, và không sinh turn Orchestrator thừa (nguyên nhân loop).
-  // + Chống spam: report chứa lỗi Abort/"turn failed" -> delivered NGAY, không bao giờ phát lại.
-  // + Khử trùng lặp: nội dung giống hệt nhau trong vòng 2 giây -> bỏ qua (delivered).
-  const meaningful: typeof batch = [];
-  for (const item of batch) {
-    if (isEmptyAgentOutput(item.message)) {
-      storage.markOutboxDelivered(item.reportId);
-      console.log(`[OrchTrigger] Dropped empty/no-response report from ${item.fromAgent?.name || 'unknown'}`);
-    } else if (ABORT_ERROR_PATTERN.test(item.message)) {
-      storage.markOutboxDelivered(item.reportId);
-      console.log(`[OrchTrigger] Dropped abort/turn-failed report from ${item.fromAgent?.name || 'unknown'} (no replay)`);
-    } else {
-      const now = Date.now();
-      const h = item.message.trim().replace(/\s+/g, ' ');
-      const last = recentReportHashes.get(h);
-      if (last !== undefined && now - last < REPORT_DEDUP_WINDOW_MS) {
-        storage.markOutboxDelivered(item.reportId);
-        console.log(`[OrchTrigger] Dropped duplicate report within ${REPORT_DEDUP_WINDOW_MS}ms from ${item.fromAgent?.name || 'unknown'}`);
-      } else {
-        recentReportHashes.set(h, now);
-        pruneRecentReportHashes();
-        meaningful.push(item);
-      }
-    }
-  }
-  if (meaningful.length === 0) return;
-  batch.length = 0;
-  batch.push(...meaningful);
 
   broadcast('agent:updated', { agent: { id: 'orchestrator', status: 'working' } } as any);
   
@@ -2183,6 +1915,8 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
   }
 
   let hasOrchestratorMessage = false;
+  // Deduplicate: track các nội dung đã broadcast để tránh gửi trùng
+  const broadcastedContents = new Set<string>();
 
   for (const msg of messages) {
     const isInternal = msg.to !== 'user' && msg.to !== 'broadcast';
@@ -2192,6 +1926,15 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
     const outContent = isToOrchestrator
       ? extractCleanTaskReport(stripToolNoiseForOrchestrator(msg.message))
       : msg.message;
+
+    // Chống broadcast trùng: nếu nội dung đã gửi rồi → skip
+    const contentKey = `${msg.to}|||${(outContent || '').trim()}`;
+    if (outContent && broadcastedContents.has(contentKey)) {
+      console.log(`[Route] Skip duplicate broadcast from ${fromAgent.name} to ${msg.to}`);
+      if (msg.to === 'orchestrator') hasOrchestratorMessage = true;
+      continue;
+    }
+    if (outContent) broadcastedContents.add(contentKey);
 
     const reply: ChatMsg = {
       id: uuidv4(),
@@ -2507,7 +2250,8 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
       const activeRoleAgents = getAgentsByRole(role);
 
       if (activeRoleAgents.length >= roleLimit) {
-        const errorContent = `[ERROR] Cannot spawn agent "${name}" with role "${role}": Role limit reached (max ${roleLimit} for role '${role}', currently ${activeRoleAgents.length}).`;
+        const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
+        const errorContent = `[Role Limit] Không thể spawn agent "${name}" role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng [TALK agent-id=... message=...] để giao việc.`;
         console.warn(`[Role Limit] ${errorContent}`);
         commandResults.push(errorContent);
 
@@ -2759,7 +2503,8 @@ function getOrchClient(): ACPClient {
 // Thời điểm server khởi động (epoch ms) — frontend dùng hiển thị uptime "Live WS"
 const SERVER_START_TIME = Date.now();
 app.get('/api/server-info', (_req, res) => {
-  res.json({ serverStartTime: SERVER_START_TIME, uptimeMs: Date.now() - SERVER_START_TIME });
+  const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+  res.json({ serverStartTime: SERVER_START_TIME, uptimeMs: Date.now() - SERVER_START_TIME, cwd: process.cwd(), version: pkg.version || '0.0.0' });
 });
 
 app.get('/api/agents', (_req, res) => {
@@ -2793,7 +2538,8 @@ app.post('/api/agents', async (req, res) => {
   const activeRoleAgents = getAgentsByRole(role);
 
   if (activeRoleAgents.length >= roleLimit) {
-    const errorMsg = `Role limit reached: role '${role}' allows max ${roleLimit} instance(s) (currently ${activeRoleAgents.length}).`;
+    const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
+    const errorMsg = `[Role Limit] Không thể tạo agent role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng [TALK agent-id=... message=...] để giao việc.`;
     console.warn(`[API /api/agents] ${errorMsg}`);
     
     // Gửi tin nhắn lỗi về Main Orchestrator
@@ -2801,10 +2547,11 @@ app.post('/api/agents', async (req, res) => {
       id: uuidv4(),
       from: 'system',
       to: 'orchestrator',
-      content: `[ERROR] Cannot create agent with role "${role}": ${errorMsg}`,
+      content: errorMsg,
       timestamp: Date.now(),
       agentName: 'System',
-      agentRole: 'system'
+      agentRole: 'system',
+      msgType: 'internal'
     };
     chatHistory.push(limitErrMsg);
     storage.saveMessage(limitErrMsg);
@@ -2816,7 +2563,7 @@ app.post('/api/agents', async (req, res) => {
       id: uuidv4(),
       from: 'system',
       to: 'user',
-      content: `[ERROR] Cannot create agent with role "${role}": ${errorMsg}`,
+      content: errorMsg,
       timestamp: Date.now(),
       agentName: 'System',
       agentRole: 'system'
@@ -3551,20 +3298,13 @@ app.get('/api/models', async (req, res) => {
 
 // ============ SETTINGS API ============
 app.get('/api/settings/watchdog', (_req, res) => {
-  const enableWatchdog = storage.getSetting('enableWatchdog', true);
-  res.json({ enableWatchdog: enableWatchdog !== false });
+  res.json({ enableWatchdog: false });
 });
 
 app.post('/api/settings/watchdog', (req, res) => {
   const { enableWatchdog } = req.body || {};
   const enabled = Boolean(enableWatchdog);
   storage.setSetting('enableWatchdog', enabled);
-  if (!enabled) {
-    // Tắt watchdog: dọn sạch trạng thái đang chạy để không còn escalation/dễ bắn report về orchestrator
-    watchdogState.checkCount.clear();
-    watchdogState.awaitingTalkResponse.clear();
-    watchdogState.lastTalkTime.clear();
-  }
   broadcast('settings:updated', { enableWatchdog: enabled });
   res.json({ success: true, enableWatchdog: enabled });
 });
@@ -3938,7 +3678,6 @@ loadState();
 syncOpencodeAgents();
 loadCustomRoles();
 startTitlePoller();
-startWorkerWatchdog();
 
 // Startup: fetch missing sessionTitles cho agents có sessionId nhưng thiếu title
 async function fetchMissingTitles() {
@@ -3962,7 +3701,6 @@ function gracefulShutdown() {
   console.log('\n[Server] Graceful shutdown initiated...');
 
   if (titlePollerTimer) clearInterval(titlePollerTimer);
-  if (watchdogTimer) clearInterval(watchdogTimer);
 
   // Close SSE clients
   sseClients.forEach(res => {
@@ -3970,10 +3708,11 @@ function gracefulShutdown() {
   });
   sseClients.clear();
 
-  // Abort running processes
+  // Abort running processes and kill all child process trees
   for (const [, client] of clients) {
     try { client.abort(); } catch {}
   }
+  try { ACPClient.killAllChildProcesses(); } catch {}
 
   // WAL checkpoint & SQLite cleanup
   try { storage.close(); } catch {}
@@ -3985,12 +3724,22 @@ function gracefulShutdown() {
 
   // Force exit after 3s if hanging
   setTimeout(() => {
+    try { ACPClient.killAllChildProcesses(); } catch {}
     process.exit(0);
   }, 3000).unref();
 }
 
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
+process.on('exit', () => {
+  try { ACPClient.killAllChildProcesses(); } catch {}
+});
+process.on('SIGINT', () => {
+  try { ACPClient.killAllChildProcesses(); } catch {}
+  gracefulShutdown();
+});
+process.on('SIGTERM', () => {
+  try { ACPClient.killAllChildProcesses(); } catch {}
+  gracefulShutdown();
+});
 
 // Khi khởi động lại (sau mất điện / crash): gửi lại mọi report còn pending trong outbox DB.
 // Reset attempts về 0 để mỗi lần chạy lại đều thử gửi lại (đúng ý người dùng: "chạy lại thì gửi lại").
@@ -4123,8 +3872,14 @@ function emitRuntimeError(kind: string, err: any) {
     broadcast('chat:message', { msg: errMsg });
   } catch {}
 }
-process.on('uncaughtException', (err) => emitRuntimeError('UncaughtException', err));
-process.on('unhandledRejection', (reason) => emitRuntimeError('UnhandledRejection', reason));
+process.on('uncaughtException', (err) => {
+  emitRuntimeError('UncaughtException', err);
+  try { ACPClient.killAllChildProcesses(); } catch {}
+});
+process.on('unhandledRejection', (reason) => {
+  emitRuntimeError('UnhandledRejection', reason);
+  try { ACPClient.killAllChildProcesses(); } catch {}
+});
 
 // Khởi động: dò port trống chủ động từ PORT (mặc định 3001) rồi mới bind;
 // startServerWithPortFallback vẫn là lớp phòng thủ EADDRINUSE nếu port bị chiếm sau lúc dò.

@@ -61,6 +61,8 @@ export function App() {
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('disconnected');
   const [disconnectedAt, setDisconnectedAt] = useState<number | null>(null);
   const [serverStartTime, setServerStartTime] = useState<number | null>(null);
+  const [serverCwd, setServerCwd] = useState<string>('');
+  const [serverVersion, setServerVersion] = useState<string>('');
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [, setStatusTick] = useState(0);
 
@@ -90,6 +92,8 @@ export function App() {
       const res = await fetch(`${API}/api/server-info`);
       const data = await res.json();
       if (data && typeof data.serverStartTime === 'number') setServerStartTime(data.serverStartTime);
+      if (data && typeof data.cwd === 'string') setServerCwd(data.cwd);
+      if (data && typeof data.version === 'string') setServerVersion(data.version);
     } catch {}
   };
   const [loading, setLoading] = useState(false);
@@ -841,6 +845,53 @@ export function App() {
               <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0, letterSpacing: '-0.02em', color: '#f8fafc' }}>
                 AgentForge
               </h2>
+              {/* CWD Badge — inline with logo */}
+              {serverCwd && (
+                <span
+                  onClick={() => { navigator.clipboard.writeText(serverCwd).catch(() => {}); }}
+                  title={`${serverCwd}\nClick để copy đường dẫn`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '2px 8px',
+                    background: 'rgba(59, 130, 246, 0.12)',
+                    border: '1px solid rgba(59, 130, 246, 0.25)',
+                    borderRadius: 6,
+                    fontSize: 11,
+                    fontWeight: 500,
+                    color: '#93c5fd',
+                    cursor: 'pointer',
+                    maxWidth: 260,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    transition: 'background 0.15s',
+                    lineHeight: '18px'
+                  }}
+                  onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(59, 130, 246, 0.22)'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(59, 130, 246, 0.12)'; }}
+                >
+                  📁 {serverCwd}
+                </span>
+              )}
+              {/* Version Badge */}
+              {serverVersion && (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 7px',
+                  background: 'rgba(34, 197, 94, 0.12)',
+                  border: '1px solid rgba(34, 197, 94, 0.25)',
+                  borderRadius: 6,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#86efac',
+                  lineHeight: '18px'
+                }} title={`AgentForge v${serverVersion}`}>
+                  v{serverVersion}
+                </span>
+              )}
             </div>
 
             {/* Theme Toggle + Connection Status Pill */}

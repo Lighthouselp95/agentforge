@@ -9,8 +9,6 @@ import type { AgentConfig, AgentMessage, TokenUsage, ToolCallInfo } from './type
 
 const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
-// Timeout mỗi lượt opencode run (ms) — tránh treo vô hạn khi model/API kẹt
-const RUN_TIMEOUT_MS = parseInt(process.env.AGENTFORGE_RUN_TIMEOUT || '300000', 10);
 // Giới hạn hàng đợi tin nhắn chờ xử lý cho 1 agent — chống phình bộ nhớ
 const MAX_PENDING = 20;
 
@@ -18,6 +16,25 @@ export class ACPClient {
   // Shared map across all instances: agentId → sessionId
   // Prevents session cross-contamination when multiple agents spawn simultaneously
   private static agentSessions = new Map<string, string>();
+  // Active child process PIDs across all ACP instances for clean termination on exit/crash
+  public static activeChildPids = new Set<number>();
+
+  /** Kill all active child processes and subtrees (Windows taskkill / Linux SIGKILL) */
+  static killAllChildProcesses() {
+    if (ACPClient.activeChildPids.size === 0) return;
+    const pids = Array.from(ACPClient.activeChildPids);
+    for (const pid of pids) {
+      try {
+        if (isWin) {
+          execSync(`taskkill /pid ${pid} /T /F`, { timeout: 3000, stdio: 'ignore' });
+        } else {
+          try { process.kill(-pid, 'SIGKILL'); } catch {}
+          try { process.kill(pid, 'SIGKILL'); } catch {}
+        }
+      } catch {}
+    }
+    ACPClient.activeChildPids.clear();
+  }
 
   private config: AgentConfig;
   private sessionId: string | null = null;
@@ -162,13 +179,14 @@ export class ACPClient {
       this.proc = null;
 
       if (pid) {
+        ACPClient.activeChildPids.delete(pid);
         try {
           if (isWin) {
             // CO LAP PID: chi kill dung cay tien trinh cua instance nay
             // (taskkill /T /F theo pid) — TUYET DOI khong kill theo ten
             // opencode.exe de tranh giet nham cac agent dang chay song song.
             try {
-              exec(`taskkill /pid ${pid} /T /F`, { timeout: 3000 });
+              execSync(`taskkill /pid ${pid} /T /F`, { timeout: 3000, stdio: 'ignore' });
             } catch {
               // Fallback cuoi cung van theo dung PID nay
               try { process.kill(pid, 0); } catch {}
@@ -402,6 +420,9 @@ export class ACPClient {
           }
         );
         this.proc = proc as any;
+        if (proc.pid) {
+          ACPClient.activeChildPids.add(proc.pid);
+        }
 
         const stdoutDecoder = new StringDecoder('utf8');
         const stderrDecoder = new StringDecoder('utf8');
@@ -430,42 +451,16 @@ export class ACPClient {
         });
         proc.stderr?.on('data', (chunk: Buffer) => {
           stderrStr += stderrDecoder.write(chunk);
-          if (armTimer) armTimer(); // có output → turn vẫn sống, reset idle-watchdog
         });
 
-        // IDLE-TIMEOUT thay vì wall-clock: chỉ kill khi opencode IM LẶNG liên tục RUN_TIMEOUT_MS.
-        // Turn dài (build, nhiều tool call) vẫn chạy tiếp miễn là còn xuất dữ liệu.
-        let timer: NodeJS.Timeout | null = null;
-        const armTimer = () => {
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(() => {
-            if (proc.pid) {
-              try {
-                if (isWin) {
-                  execSync(`taskkill /F /T /PID ${proc.pid}`, { timeout: 3000, stdio: 'ignore' });
-                } else {
-                  proc.kill('SIGTERM');
-                }
-              } catch {}
-            }
-            const e: any = new Error(`Command idle timed out after ${RUN_TIMEOUT_MS}ms without output`);
-            e.stdout = stdoutStr; e.stderr = stderrStr;
-            e.isIdleTimeout = true;
-            reject(e);
-          }, RUN_TIMEOUT_MS);
-        };
-        armTimer();
-
-        proc.stdout?.on('data', () => { if (armTimer) armTimer(); });
-
         proc.on('error', (err) => {
-          if (timer) { clearTimeout(timer); timer = null; }
+          if (proc.pid) ACPClient.activeChildPids.delete(proc.pid);
           this.proc = null;
           reject(err);
         });
 
         proc.on('close', (code) => {
-          if (timer) { clearTimeout(timer); timer = null; }
+          if (proc.pid) ACPClient.activeChildPids.delete(proc.pid);
           this.proc = null;
           stdoutStr += stdoutDecoder.end();
           stderrStr += stderrDecoder.end();
@@ -541,31 +536,6 @@ export class ACPClient {
           to: 'orchestrator',
           content: '[STOPPED] Agent was stopped by user.',
           timestamp: Date.now(),
-        };
-      }
-
-      // IDLE-TIMEOUT: KHÔNG retry (chạy lại prompt = lặp side effects + im lặng thêm N phút).
-      // Parse ngay phần stdout đã stream được và trả về để orchestrator vẫn nhận báo cáo + được wake.
-      if (err.isIdleTimeout) {
-        const partial = this.parseJsonlEvents(err.stdout?.toString() || '');
-        if (!this.sessionId && partial.sessionId) {
-          this.sessionId = partial.sessionId;
-          ACPClient.registerSession(this.config.id, partial.sessionId);
-        }
-        const truncNote = '⚠️ [Turn bị cắt do opencode im lặng quá lâu — nội dung dưới đây là phần đã kịp thực hiện]';
-        const partialContent = partial.content ? `${truncNote}\n${partial.content}` : `${truncNote}\n(Error: ${err.message})`;
-        console.log(`[ACP] Idle timeout — returning partial output (${(partial.content || '').length} chars) instead of retrying`);
-        return {
-          id: uuidv4(),
-          from: this.config.id,
-          to: 'orchestrator',
-          content: partialContent,
-          timestamp: Date.now(),
-          transcript: partial.transcript || undefined,
-          toolCalls: partial.toolCalls.length ? partial.toolCalls : undefined,
-          thinking: partial.thinking,
-          tokenUsage: partial.tokenUsage,
-          contextLength: partial.contextLength,
         };
       }
 

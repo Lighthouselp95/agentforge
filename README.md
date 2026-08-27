@@ -64,6 +64,10 @@ Oneshot run at: Agentforge-web.exe release
 - **OpenCode**: `opencode run --auto --format json` (per-agent session)
 - **Storage**: SQLite (`data/agentforge.db`, better-sqlite3)
 
+## Documentation
+
+- [Agent Lifecycle & Injection Protocol](docs/AGENT_LIFECYCLE.md): Chi tiết về vòng đời agent, luồng dừng/hủy tiến trình và thông điệp hệ thống `[STOPPED]`.
+
 ## Agent Prompts
 
 Agent system prompts live in `.opencode/agents/*.md` (coder, tester, reviewer, docs, planner, researcher, verifier, debugger, searcher, orchestrator). Loaded by OpenCode via `--agent <role>` at spawn time. Orchestrator must NOT use OpenCode's native subagent/task system — it only outputs text commands (`[SPAWN]`, `[TALK]`, `[STOP]`, `[DELETE]`, `[CREATE ROLE]`).
