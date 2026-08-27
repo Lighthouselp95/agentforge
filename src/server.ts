@@ -2857,21 +2857,6 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     }
   }
 
-  // Khi agent hoặc orchestrator đang bận → thông báo vào hàng đợi (bỏ qua với retry)
-  const wasQueued = (!isRetry) && client.isBusy();
-  if (wasQueued) {
-    const targetName = targetAgent ? targetAgent.name : 'Orchestrator';
-    const targetId = targetAgent ? targetAgent.id : 'orchestrator';
-    const qMsg: ChatMsg = {
-      id: uuidv4(),
-      from: 'user',
-      to: targetId,
-      content: `[QUEUED] "${rawMsg.slice(0, 120)}${rawMsg.length > 120 ? '...' : ''}" — ${targetName} is busy, message queued (position ${client.queueLength() + 1})`,
-      timestamp: Date.now()
-    };
-    chatHistory.push(qMsg); storage.saveMessage(qMsg);
-    broadcast('chat:message', { msg: qMsg });
-  }
   let finalPrompt = '';
   if (isSlashCommand) {
     finalPrompt = rawMsg;
@@ -2880,6 +2865,24 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
   } else {
     finalPrompt = prompt + ((client.getSessionId() && !shouldReinject) ? '' : `\n\n${ORCH_REMINDER}`);
   }
+
+  // ============ FIRE-AND-FORGET INJECTION INSTANCE (HOÀN TOÀN IM LẶNG) ============
+  // Khi agent / Orchestrator đang bận (client.isBusy() === true) và đã có session:
+  // Spawn ngay 1 tiến trình phụ detached nạp thẳng tin nhắn mới vào session database của OpenCode trong im lặng,
+  // luồng chính vẫn tiếp tục chạy và stream bình thường mà không bị gián đoạn.
+  if (client.isBusy() && client.getSessionId() && !isRetry) {
+    const injectRes = await client.injectPromptAsync(finalPrompt);
+    if (injectRes.success) {
+      console.log(`[Inject] Injected prompt silently into session ${client.getSessionId()} (PID: ${injectRes.pid}) while main turn continues.`);
+      return {
+        response: '',
+        sid: client.getSessionId(),
+        commands: []
+      };
+    }
+  }
+
+  // Nếu không thể inject hoặc là turn đầu tiên chưa có session: xếp hàng đợi bình thường
   const result = await client.enqueue(finalPrompt);
   sid = client.getSessionId();
   if (sid) {

@@ -244,6 +244,94 @@ export class ACPClient {
   private _aborted = false;
 
   /**
+   * Fire-and-Forget Injection Instance:
+   * Khi luồng chính đang bận (this.busy === true), spawn ngay một tiến trình opencode riêng
+   * để nạp prompt mới thẳng vào session SQLite database của OpenCode và tự thoát trong im lặng (0 UI interruption).
+   */
+  async injectPromptAsync(prompt: string): Promise<{ success: boolean; pid?: number }> {
+    if (!this.sessionId) {
+      return { success: false };
+    }
+
+    try {
+      const projectDir = this.config.projectDir || process.cwd();
+      const relFile = join('data', 'tmp', `inject-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+      const tmpFile = join(projectDir, relFile);
+      mkdirSync(join(projectDir, 'data', 'tmp'), { recursive: true });
+      writeFileSync(tmpFile, prompt.normalize('NFC'), { encoding: 'utf-8' });
+
+      const roleToAgent: Record<string, string> = {
+        coder: 'coder', reviewer: 'reviewer', tester: 'tester',
+        docs: 'docs', planner: 'planner', orchestrator: 'orchestrator',
+        researcher: 'researcher', verifier: 'verifier', debugger: 'debugger', searcher: 'searcher',
+        idea: 'idea'
+      };
+      const agentName = roleToAgent[this.config.role] || this.config.role || (this.config.type === 'orchestrator' ? 'orchestrator' : 'coder');
+      let agentFlag = ` --agent ${agentName} --session "${this.sessionId}" --auto --format json`;
+      if (this.config.model) {
+        agentFlag += ` --model "${this.config.model}"`;
+      }
+
+      const isSlash = prompt.trim().startsWith('/');
+      let cmdArgs: string[] = [];
+
+      if (isSlash) {
+        const slashParts = prompt.trim().replace(/^\//, '').trim().split(/\s+/);
+        const cleanCmd = slashParts[0] || '';
+        const cmdArgsRest = slashParts.slice(1).join(' ').trim();
+        const messageArg = cmdArgsRest ? ` "${cmdArgsRest.replace(/"/g, '`"')}"` : '';
+        const modelFlag = this.config.model ? ` --model "${this.config.model}"` : '';
+        const fullCmd = `opencode run${messageArg} --command "${cleanCmd}" --session "${this.sessionId}"${modelFlag} --auto --format json`;
+        cmdArgs = isWin
+          ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; ${fullCmd}`]
+          : ['-c', fullCmd];
+      } else {
+        cmdArgs = isWin
+          ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Raw -Encoding utf8 '${relFile}' | opencode run${agentFlag}`]
+          : ['-c', `cat "${relFile}" | opencode run${agentFlag}`];
+      }
+
+      const utf8Env = {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1',
+        LANG: 'en_US.UTF-8',
+        LC_ALL: 'en_US.UTF-8'
+      };
+
+      const injectProc = spawn(
+        isWin ? 'powershell.exe' : 'sh',
+        cmdArgs,
+        {
+          cwd: projectDir,
+          env: utf8Env,
+          windowsHide: true,
+          stdio: 'ignore' // Hoàn toàn im lặng, không bắt pipe gây treo
+        }
+      );
+
+      const pid = injectProc.pid;
+      if (pid) {
+        ACPClient.activeChildPids.add(pid);
+      }
+
+      injectProc.on('close', () => {
+        if (pid) ACPClient.activeChildPids.delete(pid);
+        try { unlinkSync(tmpFile); } catch {}
+      });
+
+      injectProc.on('error', () => {
+        if (pid) ACPClient.activeChildPids.delete(pid);
+        try { unlinkSync(tmpFile); } catch {}
+      });
+
+      return { success: true, pid };
+    } catch {
+      return { success: false };
+    }
+  }
+
+  /**
    * Gửi prompt qua hàng đợi: nếu agent đang bận, tin được xếp lại
    * và tự động gửi ngay khi lượt hiện tại (và các tin trước đó) hoàn tất.
    * Giới hạn queue để tránh memory leak khi agent bị kẹt.
