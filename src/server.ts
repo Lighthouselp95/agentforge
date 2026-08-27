@@ -887,6 +887,8 @@ WHAT I DID: <summary>
     broadcast('agent:updated', { agent });
     checkAndSynthesize(agent.id);
   } catch (e: any) {
+    const isAborted = e.message?.toLowerCase().includes('abort') || e.message?.toLowerCase().includes('aborted');
+    if (isAborted) return;
     agent.status = 'error';
     agent.workingSince = undefined;
     storage.updateAgent(agent.id, { status: 'error', workingSince: null });
@@ -1244,98 +1246,34 @@ interface BracketCommand {
  * Trích xuất một lệnh [TAG ...] duy nhất bắt đầu từ startIndex sử dụng thuật toán đếm ngoặc cân bằng kết hợp phân tích boundary payload.
  */
 function extractBracketCommand(text: string, startIndex: number): { tag: string; content: string; fullMatch: string; endIndex: number } | null {
-  if (!text || startIndex < 0 || startIndex >= text.length || text[startIndex] !== '[') return null;
+  if (!text || startIndex < 0 || startIndex >= text.length || text[startIndex] !== "[") return null;
   
-  // FIX: khong dung /i o nhom thu 2 — truoc day 'SPAWN role=...' bi nuot thanh tag='SPAWN role',
-  // lam mat chu 'role=' khoi content -> parseSpawnTags khong tim thay role. Tu thu 2 tro di
-  // chi chap nhan tu ALL-CAPS (de giu tag da chu nhu CREATE ROLE / STOP AGENT).
   const tagMatch = text.substring(startIndex + 1).match(/^([A-Za-z_]+(?:\s+[A-Z_]+)*)/);
   if (!tagMatch) return null;
   const tag = tagMatch[1];
 
   let endIdx = -1;
+  let depth = 0;
+  let inQuote: string | null = null;
 
-  // Kiểm tra nếu là lệnh TALK hoặc SPAWN có chứa message=/task=
-  const tagHeader = text.substring(startIndex, Math.min(text.length, startIndex + 60));
-  const isMessageOrTask = /\[(?:TALK|SPAWN)/i.test(tagHeader) && /(?:message|msg|task)\s*=/i.test(text.substring(startIndex, Math.min(text.length, startIndex + 200)));
+  for (let i = startIndex; i < text.length; i++) {
+    const char = text[i];
+    const prevChar = i > startIndex ? text[i - 1] : "";
 
-  if (isMessageOrTask) {
-    const payloadRegex = /(?:message|msg|task)\s*=\s*/i;
-    const match = text.substring(startIndex).match(payloadRegex);
-    if (match && match.index !== undefined) {
-      const payloadStart = startIndex + match.index + match[0].length;
-      const firstChar = text[payloadStart];
-
-      if (firstChar === '"' || firstChar === "'" || firstChar === '“') {
-        const closingQuote = firstChar === '“' ? '”' : firstChar;
-        let quoteEnd = -1;
-        for (let j = payloadStart + 1; j < text.length; j++) {
-          if (text[j] === closingQuote && text[j - 1] !== '\\') {
-            quoteEnd = j;
-            break;
-          }
-        }
-        if (quoteEnd !== -1) {
-          const closingBracket = text.indexOf(']', quoteEnd);
-          if (closingBracket !== -1 && closingBracket - quoteEnd < 20) {
-            endIdx = closingBracket;
-          } else {
-            endIdx = quoteEnd;
-          }
-        }
-      } else {
-        // Message không dùng quote: ranh giới kết thúc là:
-        // 1. Dấu ']' đóng trên cùng dòng lệnh
-        // 2. Hoặc nếu lệnh nhiều dòng: trước lệnh kế tiếp ('\n[') hoặc trước đoạn text mới ('\n\n')
-        const firstNewline = text.indexOf('\n', startIndex);
-        const currentLineEnd = firstNewline !== -1 ? firstNewline : text.length;
-        const bracketOnLine = text.lastIndexOf(']', currentLineEnd);
-
-        if (bracketOnLine > startIndex) {
-          endIdx = bracketOnLine;
-        } else {
-          const nextCommandIdx = text.indexOf('\n[', startIndex + 1);
-          const doubleNewlineIdx = text.indexOf('\n\n', startIndex + 1);
-          const crlfDoubleIdx = text.indexOf('\r\n\r\n', startIndex + 1);
-
-          const candidates = [nextCommandIdx, doubleNewlineIdx, crlfDoubleIdx].filter(idx => idx !== -1);
-          const searchLimit = candidates.length > 0 ? Math.min(...candidates) : text.length;
-
-          const lastBracket = text.lastIndexOf(']', searchLimit);
-          if (lastBracket > startIndex) {
-            endIdx = lastBracket;
-          } else {
-            endIdx = searchLimit > startIndex ? searchLimit - 1 : startIndex;
-          }
-        }
+    if (inQuote) {
+      if (char === inQuote && prevChar !== "\\") {
+        inQuote = null;
       }
-    }
-  }
-
-  // Fallback: Balanced Bracket depth counting
-  if (endIdx === -1) {
-    let depth = 0;
-    let inQuote: string | null = null;
-
-    for (let i = startIndex; i < text.length; i++) {
-      const char = text[i];
-      const prevChar = i > startIndex ? text[i - 1] : '';
-
-      if (inQuote) {
-        if (char === inQuote && prevChar !== '\\') {
-          inQuote = null;
-        }
-      } else {
-        if (char === '"' || char === "'" || char === '`' || char === '“' || char === '”') {
-          inQuote = char === '“' ? '”' : char;
-        } else if (char === '[') {
-          depth++;
-        } else if (char === ']') {
-          depth--;
-          if (depth === 0) {
-            endIdx = i;
-            break;
-          }
+    } else {
+      if (char === '"' || char === "'" || char === '`' || char === '“' || char === '”') {
+        inQuote = char === '“' ? '”' : char;
+      } else if (char === '[') {
+        depth++;
+      } else if (char === ']') {
+        depth--;
+        if (depth === 0) {
+          endIdx = i;
+          break;
         }
       }
     }
@@ -1476,23 +1414,16 @@ function stripCommandTags(text: string): string {
 
 function parseTalkTag(tagContent: string): { agentId: string; message: string; task?: string } | null {
   if (!tagContent) return null;
-  const agentMatch = tagContent.match(/(?:agent-id|agent_id|target-id|target_id|target|agent|to|id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s\]]+))/i);
-  if (!agentMatch) return null;
-  const rawId = agentMatch[1] || agentMatch[2] || agentMatch[3] || agentMatch[4];
-  const agentId = cleanTargetIdentifier(rawId);
-  if (!agentId) return null;
-
-  // Quét toàn bộ tham số key=value (message/msg/content/task).
-  // Mỗi giá trị chạy tới key kế tiếp; match rơi vào trong chuỗi có dấu quote bị bỏ qua.
-  const paramRe = /\b(message|msg|content|task)\s*=\s*/gi;
+  
+  const paramRe = /\b(agent-id|agent_id|target-id|target_id|target|agent|to|id|message|msg|content|task)\s*=\s*/gi;
   const found: Array<{ key: string; keyStart: number; valueStart: number }> = [];
   let pm: RegExpExecArray | null;
   while ((pm = paramRe.exec(tagContent)) !== null) {
     const before = tagContent.substring(0, pm.index);
     const inDouble = ((before.match(/"/g) || []).length % 2) === 1;
     const inSingle = ((before.match(/'/g) || []).length % 2) === 1;
-    if (inDouble || inSingle) continue; // nằm trong giá trị quote — không phải tham số mới
-    found.push({ key: (pm[1] ?? '').toLowerCase(), keyStart: pm.index, valueStart: pm.index + pm[0].length });
+    if (inDouble || inSingle) continue;
+    found.push({ key: (pm[1] ?? "").toLowerCase(), keyStart: pm.index, valueStart: pm.index + pm[0].length });
   }
 
   const stripQuotes = (v: string): string => {
@@ -1520,10 +1451,11 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
     return stripQuotes(tagContent.substring(p.valueStart, end));
   };
 
-  const message = valueOf(['message', 'msg', 'content']);
-  const task = valueOf(['task']);
+  const rawId = valueOf(["agent-id", "agent_id", "target-id", "target_id", "target", "agent", "to", "id"]);
+  const agentId = cleanTargetIdentifier(rawId || "");
+  const message = valueOf(["message", "msg", "content"]);
+  const task = valueOf(["task"]);
 
-  // Backward-compat: lệnh cũ chỉ gửi task= mà không có message= → dùng task làm nội dung tin nhắn
   const finalMessage = (message && message.trim()) || (task && task.trim());
   if (agentId && finalMessage) {
     const trimmedTask = task && task.trim() ? task.trim() : undefined;
@@ -1894,9 +1826,10 @@ function extractCleanTaskReport(content: string): string {
   let from = startIdx;
   // Giữ kèm dòng "Task complete." (hoặc "[TO: ...] Task complete.") ngay trước marker nếu có
   const before = text.slice(0, startIdx);
-  const lastLineMatch = before.match(/(?:^|\n)([^\n]*Task complete\.?[^\n]*)$/i);
+  const beforeTrim = before.trimEnd();
+  const lastLineMatch = beforeTrim.match(/(?:^|\n)([^\n]*Task complete\.?[^\n]*)$/i);
   if (lastLineMatch) {
-    from = before.length - lastLineMatch[1].length;
+    from = beforeTrim.length - lastLineMatch[1].length;
   }
   // Marker kết thúc tương ứng: === END <loại> REPORT ===
   const afterStart = text.slice(startIdx);
@@ -2159,16 +2092,19 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
     addUnreadForOrchestrator(parseErrMsg);
     broadcast('chat:message', { msg: parseErrMsg });
   }
-  for (const spawn of spawns) {
-    const { role, name, task } = spawn;
-    const existing = findAgentByName(name);
-    if (existing) {
-      commandResults.push(`Reused ${name} (${existing.id})`);
-      existing.status = 'working';
-      existing.workingSince = Date.now();
-      existing.task = task;
-      storage.updateAgent(existing.id, { status: 'working', workingSince: existing.workingSince });
-      broadcast('agent:updated', { agent: existing });
+   for (const spawn of spawns) {
+     const { role, name, task } = spawn;
+     const existing = findAgentByName(name);
+     if (existing) {
+       if (existing.status === 'working') {
+       commandResults.push(`[WARN] Agent ${name} (${existing.id}) is already working; reusing with new task may interrupt current work.`);
+     }
+       commandResults.push(`Reused ${name} (${existing.id})`);
+       existing.status = 'working';
+       existing.workingSince = Date.now();
+       existing.task = task;
+       storage.updateAgent(existing.id, { status: 'working', workingSince: existing.workingSince });
+       broadcast('agent:updated', { agent: existing });
       
       const reuseTaskMsg: ChatMsg = {
         id: uuidv4(),
@@ -2231,6 +2167,8 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
           broadcast('agent:updated', { agent: existing });
           checkAndSynthesize(existing.id);
         } catch (e: any) {
+          const isAborted = e.message?.toLowerCase().includes('abort') || e.message?.toLowerCase().includes('aborted');
+          if (isAborted) return;
           existing.status = 'error';
           existing.workingSince = undefined;
           storage.updateAgent(existing.id, { status: 'error', workingSince: null });
@@ -2352,6 +2290,8 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
           broadcast('agent:updated', { agent: na });
           checkAndSynthesize(spawnId);
         } catch (e: any) {
+          const isAborted = e.message?.toLowerCase().includes('abort') || e.message?.toLowerCase().includes('aborted');
+          if (isAborted) return;
           na.status = 'error';
           na.workingSince = undefined;
           storage.updateAgent(na.id, { status: 'error', workingSince: null });
@@ -2462,6 +2402,8 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
         broadcast('agent:updated', { agent: ta });
         checkAndSynthesize(ta.id);
       } catch (e: any) {
+        const isAborted = e.message?.toLowerCase().includes('abort') || e.message?.toLowerCase().includes('aborted');
+        if (isAborted) return;
         ta.status = 'error';
         ta.workingSince = undefined;
         storage.updateAgent(ta.id, { status: 'error', workingSince: null });
