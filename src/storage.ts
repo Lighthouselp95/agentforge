@@ -89,6 +89,7 @@ interface StorageSchema {
   settings?: Record<string, any>;
   outbox?: OutboxReport[];
   chatQueue?: ChatQueueItem[];
+  unprocessedUserMessages?: Record<string, string[]>;
 }
 
 let inMemoryAgents = new Map<string, any>();
@@ -96,6 +97,7 @@ let inMemoryHistory: any[] = [];
 let inMemorySettings: Record<string, any> = {};
 let inMemoryOutbox: OutboxReport[] = [];
 let inMemoryChatQueue: ChatQueueItem[] = [];
+let inMemoryUnprocessedUserMessages: Record<string, string[]> = {};
 let isDirty = false;
 let isWriting = false;
 
@@ -179,6 +181,7 @@ function loadStateFromDisk() {
     inMemorySettings = (loadedState as any).settings || {};
     inMemoryOutbox = loadedState.outbox || [];
     inMemoryChatQueue = (loadedState as any).chatQueue || [];
+    inMemoryUnprocessedUserMessages = (loadedState as any).unprocessedUserMessages || {};
 
     // If we recovered from backup or if backup doesn't exist yet, ensure backup is up to date
     if (loadedFromBackup) {
@@ -244,7 +247,8 @@ function writeStateSync() {
       history: inMemoryHistory.slice(-MAX_PERSISTED_MESSAGES),
       settings: inMemorySettings,
       outbox: inMemoryOutbox.slice(-500),
-      chatQueue: inMemoryChatQueue.slice(-200)
+      chatQueue: inMemoryChatQueue.slice(-200),
+      unprocessedUserMessages: inMemoryUnprocessedUserMessages
     };
     const content = JSON.stringify(data, null, 2);
 
@@ -438,6 +442,34 @@ export const storage = {
     inMemoryChatQueue.sort((a, b) => a.createdAt - b.createdAt);
     inMemoryChatQueue = inMemoryChatQueue.slice(-keep);
     schedulePersist();
+  },
+
+  // ============ UNPROCESSED USER MESSAGES (Preserve on Abort / Stop) ============
+  saveUnprocessedMessage(targetId: string, text: string) {
+    if (!text || !text.trim()) return;
+    const key = targetId || 'orchestrator';
+    if (!inMemoryUnprocessedUserMessages[key]) {
+      inMemoryUnprocessedUserMessages[key] = [];
+    }
+    const cleanText = text.trim();
+    // Chống lưu trùng lặp nếu tin nhắn giống hệt đã có trong danh sách
+    if (!inMemoryUnprocessedUserMessages[key].includes(cleanText)) {
+      inMemoryUnprocessedUserMessages[key].push(cleanText);
+      schedulePersist();
+    }
+  },
+
+  getUnprocessedMessages(targetId: string): string[] {
+    const key = targetId || 'orchestrator';
+    return (inMemoryUnprocessedUserMessages[key] || []).slice();
+  },
+
+  clearUnprocessedMessages(targetId: string) {
+    const key = targetId || 'orchestrator';
+    if (inMemoryUnprocessedUserMessages[key]) {
+      delete inMemoryUnprocessedUserMessages[key];
+      schedulePersist();
+    }
   },
 
   getHistoryByAgent(agentId: string, limit = 100) {

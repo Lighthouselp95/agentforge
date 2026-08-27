@@ -1253,12 +1253,12 @@ function extractBracketCommand(text: string, startIndex: number): { tag: string;
   const tag = tagMatch[1];
 
   let endIdx = -1;
-  let depth = 0;
+  let depth = 1; // startIndex is already '['
   let inQuote: string | null = null;
 
-  for (let i = startIndex; i < text.length; i++) {
+  for (let i = startIndex + 1; i < text.length; i++) {
     const char = text[i];
-    const prevChar = i > startIndex ? text[i - 1] : "";
+    const prevChar = text[i - 1];
 
     if (inQuote) {
       if (char === inQuote && prevChar !== "\\") {
@@ -2708,6 +2708,37 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
   const client = targetAgent ? getClient(targetAgent) : getOrchClient();
   const commandResults: string[] = [];
 
+  // ============ PRESERVE & AUTO-MERGE UNPROCESSED USER MESSAGES ============
+  // Nếu lượt trước bị Stop / Abort mà còn tin nhắn chưa được xử lý,
+  // tự động gộp toàn bộ tin cũ cùng tin mới vào lượt này để không bao giờ mất yêu cầu của người dùng.
+  let effectiveMsg = rawMsg;
+  const targetKey = resolvedTargetId || 'orchestrator';
+  const storedOldMsgs = isRetry ? [] : storage.getUnprocessedMessages(targetKey);
+  const clientOldPrompts = isRetry ? [] : client.getUnprocessedPrompts();
+  const combinedOld = Array.from(new Set([...storedOldMsgs, ...clientOldPrompts])).filter(p => p && p.trim() && p.trim() !== rawMsg.trim());
+
+  if (combinedOld.length > 0 && !isSlashCommand) {
+    const oldFormatted = combinedOld.map((m, idx) => `[Tin ${idx + 1} chưa xử lý trước đó]:\n${m}`).join('\n\n---\n\n');
+    effectiveMsg = `${oldFormatted}\n\n---\n\n[Yêu cầu mới nhất]:\n${rawMsg}`;
+    
+    // Dọn sạch bộ đệm sau khi đã gộp thành công
+    storage.clearUnprocessedMessages(targetKey);
+    client.clearUnprocessedPrompts();
+
+    const mergeNotice: ChatMsg = {
+      id: uuidv4(),
+      from: 'system',
+      to: targetKey,
+      content: `🔄 Đã tự động gộp ${combinedOld.length} yêu cầu chưa được xử lý từ lượt trước vào lượt chat này để bảo toàn công việc.`,
+      timestamp: Date.now(),
+      agentName: 'System',
+      agentRole: 'system'
+    };
+    chatHistory.push(mergeNotice);
+    storage.saveMessage(mergeNotice);
+    broadcast('chat:message', { msg: mergeNotice });
+  }
+
   if (isSlashCommand) {
     client.setNeedPromptReinject(true);
   }
@@ -2722,16 +2753,16 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
     broadcast('agent:updated', { agent: targetAgent });
     if (isSlashCommand) {
-      prompt = rawMsg;
+      prompt = effectiveMsg;
     } else {
       const includeTeam = shouldIncludeTeamContext(targetAgent.id, shouldReinject);
       if (includeTeam) {
         const team = buildTeam(targetAgent.id);
         prompt = (targetAgent.sessionId && !shouldReinject)
-          ? `[TEAM UPDATE]\n${team}\n\n[FROM: user] [TO: ${targetAgent.id}] ${rawMsg}`
-          : `[TASK] ${targetAgent.task || 'General task'}\n[TEAM]\n${team}\n[/TEAM]\n\n[FROM: user] [TO: ${targetAgent.id}] ${rawMsg}`;
+          ? `[TEAM UPDATE]\n${team}\n\n[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`
+          : `[TASK] ${targetAgent.task || 'General task'}\n[TEAM]\n${team}\n[/TEAM]\n\n[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`;
       } else {
-        prompt = `[FROM: user] [TO: ${targetAgent.id}] ${rawMsg}`;
+        prompt = `[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`;
       }
     }
   } else {
@@ -2754,12 +2785,12 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     }
 
     if (isSlashCommand) {
-      prompt = rawMsg;
+      prompt = effectiveMsg;
     } else if (client.getSessionId() && !shouldReinject) {
-      prompt = `${unreadBlock ? unreadBlock + '\n\n' : ''}[FROM: user] [TO: orchestrator] ${rawMsg}`;
+      prompt = `${unreadBlock ? unreadBlock + '\n\n' : ''}[FROM: user] [TO: orchestrator] ${effectiveMsg}`;
     } else {
       const team = buildTeam('orchestrator');
-      prompt = `[TEAM]\n${team}${unreadBlock}\n[/TEAM]\n\n[FROM: user] [TO: orchestrator] ${rawMsg}`;
+      prompt = `[TEAM]\n${team}${unreadBlock}\n[/TEAM]\n\n[FROM: user] [TO: orchestrator] ${effectiveMsg}`;
     }
   }
 

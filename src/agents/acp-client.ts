@@ -6,6 +6,7 @@ import { openSync, writeSync, fsyncSync, closeSync, unlinkSync, mkdirSync, write
 import { join } from 'path';
 import { StringDecoder } from 'string_decoder';
 import type { AgentConfig, AgentMessage, TokenUsage, ToolCallInfo } from './types.js';
+import { storage } from '../storage.js';
 
 const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
@@ -43,6 +44,7 @@ export class ACPClient {
   private pending: Array<{ prompt: string; resolve: (m: AgentMessage) => void; reject: (e: any) => void }> = [];
   private aborting = false; // Idempotency guard for abort()
   private needPromptReinject = false;
+  private unprocessedPrompts: string[] = [];
 
   // Streaming terminal I/O của opencode lên UI (input prompt + từng dòng JSONL output)
   private onEvent?: (ev: any) => void;
@@ -62,6 +64,22 @@ export class ACPClient {
 
   setNeedPromptReinject(val: boolean = true) {
     this.needPromptReinject = val;
+  }
+
+  addUnprocessedPrompt(prompt: string) {
+    if (!prompt || !prompt.trim()) return;
+    const clean = prompt.trim();
+    if (!this.unprocessedPrompts.includes(clean)) {
+      this.unprocessedPrompts.push(clean);
+    }
+  }
+
+  getUnprocessedPrompts(): string[] {
+    return this.unprocessedPrompts.slice();
+  }
+
+  clearUnprocessedPrompts() {
+    this.unprocessedPrompts = [];
   }
 
   private pushOACEvent(ev: any) {
@@ -162,8 +180,16 @@ export class ACPClient {
     if (this.aborting) return true;
     this.aborting = true;
 
+    // BẢO TOÀN TIN NHẮN: Lưu lại toàn bộ các prompt trong hàng đợi chờ xử lý
+    // vào bộ đệm unprocessedPrompts và Disk Storage để gộp vào lượt kế tiếp (tránh mất tin khi Stop).
     const pendingItems = this.pending.splice(0, this.pending.length);
     for (const p of pendingItems) {
+      if (p && p.prompt && p.prompt.trim()) {
+        this.addUnprocessedPrompt(p.prompt);
+        try {
+          storage.saveUnprocessedMessage(this.config.id, p.prompt);
+        } catch {}
+      }
       try { p.reject(new Error('Agent operation aborted by user.')); } catch {}
     }
     
