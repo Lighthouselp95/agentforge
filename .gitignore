@@ -56,6 +56,11 @@ pnpm-debug.log*
 *.key
 *.cert
 
+# Documentation files (Only keep README.md and runtime prompts)
+/*.md
+!/README.md
+electron/*.md
+
 # OS & Editor files
 .DS_Store
 Thumbs.db
