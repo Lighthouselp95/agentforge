@@ -2856,13 +2856,16 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
         broadcast('agent:updated', { agent: targetAgent });
       } else {
-        const orch = agents.get(resolvedTargetId || 'orchestrator');
-        if (orch) {
-          orch.status = 'working';
-          orch.workingSince = orch.workingSince || Date.now();
-          storage.updateAgent(orch.id, { status: 'working', workingSince: orch.workingSince });
-          broadcast('agent:updated', { agent: orch });
+        const orchId = resolvedTargetId || 'orchestrator';
+        let orch = agents.get(orchId);
+        if (!orch) {
+          orch = { id: orchId, name: (orchId === 'orchestrator' ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'working', createdAt: Date.now() };
+          agents.set(orchId, orch);
         }
+        orch.status = 'working';
+        orch.workingSince = orch.workingSince || Date.now();
+        storage.updateAgent(orch.id, { status: 'working', workingSince: orch.workingSince });
+        broadcast('agent:updated', { agent: orch });
       }
       return {
         response: '',
