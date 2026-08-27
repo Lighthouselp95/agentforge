@@ -2146,28 +2146,15 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
   // SPAWN scan gộp cả thinking/reasoning: tag có thể nằm trong phần model tự nói (không nằm
   // ở final text của opencode) — trước đây chỉ parse response nên spawn im lặng thất bại.
   const scanText = response + '\n' + (extraScanText || '');
-  const hasSpawnTag = /\[SPAWN\b/i.test(scanText);
   const spawns = parseSpawnTags(scanText);
-  if (hasSpawnTag && spawns.length === 0) {
-    console.warn('[SpawnParse] Phat hien [SPAWN] trong output nhung khong parse duoc role/name/task.');
-    // In nguyen ban quanh tung vi tri [SPAWN de chuan doan format loi ngay tren console
-    const re = /\[SPAWN\b/gi;
-    let mm: RegExpExecArray | null;
-    while ((mm = re.exec(scanText)) !== null) {
-      const s = Math.max(0, mm.index - 60);
-      const e2 = Math.min(scanText.length, mm.index + 240);
-      console.warn(`[SpawnParse] context@${mm.index}: ${JSON.stringify(scanText.slice(s, e2))}`);
-    }
-    const parseErrMsg: ChatMsg = {
-      id: uuidv4(), from: 'system', to: 'orchestrator',
-      content: `[ERROR] Phát hiện lệnh [SPAWN] trong output của bạn nhưng hệ thống không đọc được đủ role/name/task. Hãy gửi lại đúng định dạng một dòng: [SPAWN role=<role> name=<name> task=<mô tả>] (task không chứa dấu ]).`,
-      timestamp: Date.now(), agentName: 'System', agentRole: 'system', msgType: 'internal'
-    };
-    chatHistory.push(parseErrMsg); storage.saveMessage(parseErrMsg);
-    addUnreadForOrchestrator(parseErrMsg);
-    broadcast('chat:message', { msg: parseErrMsg });
+  
+  // Nếu có chuỗi [SPAWN role=...] nhưng parse thất bại (thiếu name hoặc task), chỉ cảnh báo nhẹ console,
+  // tuyệt đối KHÔNG bắn tin nhắn lỗi spam về Orchestrator nếu chỉ là câu văn tự sự/ví dụ.
+  if (spawns.length === 0 && /\[SPAWN\s+role=/i.test(scanText)) {
+    console.warn('[SpawnParse] Phát hiện tag [SPAWN role=...] nhưng thiếu name hoặc task hợp lệ.');
   }
-   for (const spawn of spawns) {
+
+  for (const spawn of spawns) {
      const { role, name, task } = spawn;
      const existing = findAgentByName(name);
      if (existing) {
