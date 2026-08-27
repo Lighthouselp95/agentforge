@@ -1403,29 +1403,6 @@ function stripCommandTags(text: string): string {
     lastIndex = cmd.endIndex;
   }
   result += text.substring(lastIndex);
-  // Xóa sạch hoàn toàn các thẻ lệnh standalone còn sót lại.
-  // FIX strip-backtick: chỉ strip tag NẰM NGOÀI code-span; tag trong `...` / ```...``` giữ nguyên
-  // (tránh nuốt trắng ví dụ: "Phải dùng `[RESUME AGENT target-id=...]` để khởi động lại").
-  const cleanRanges = getCodeSpanRanges(result);
-  if (cleanRanges.length === 0) {
-    result = result.replace(/\[(?:TALK|SPAWN|CREATE ROLE|STOP|RESUME)[^\]]*\]?/gi, '');
-  } else {
-    let rebuilt = '';
-    let scanPos = 0;
-    while (scanPos < result.length) {
-      const nextRange = cleanRanges.find(([s]) => s >= scanPos);
-      const segEnd = nextRange ? nextRange[0] : result.length;
-      const segment = result.substring(scanPos, segEnd);
-      rebuilt += segment.replace(/\[(?:TALK|SPAWN|CREATE ROLE|STOP|RESUME)[^\]]*\]?/gi, '');
-      if (nextRange) {
-        rebuilt += result.substring(nextRange[0], nextRange[1]); // giữ nguyên code-span
-        scanPos = nextRange[1];
-      } else {
-        scanPos = result.length;
-      }
-    }
-    result = rebuilt;
-  }
   return result.trim();
 }
 

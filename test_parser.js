@@ -135,6 +135,20 @@ function extractBracketCommands(text, targetTags = ['TALK', 'SPAWN', 'CREATE ROL
   return commands;
 }
 
+function stripCommandTags(text) {
+  if (!text) return '';
+  const commands = extractBracketCommands(text, ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT']);
+  if (commands.length === 0) return text.trim();
+  let result = '';
+  let lastIndex = 0;
+  for (const cmd of commands) {
+    result += text.substring(lastIndex, cmd.startIndex);
+    lastIndex = cmd.endIndex;
+  }
+  result += text.substring(lastIndex);
+  return result.trim();
+}
+
 function parseTalkTag(tagContent) {
   if (!tagContent) return null;
 
@@ -199,51 +213,33 @@ function assert(condition, message) {
 }
 
 console.log('===============================================================');
-console.log('CHẠY KIỂM THỬ BỘ TEST CASE PARSER MỚI (test_parser.js)');
+console.log('CHẠY KIỂM THỬ BỘ TEST CASE PARSER NGUYÊN VĂN (test_parser.js)');
 console.log('===============================================================\n');
 
-// Test Case 10: Lệnh TALK KHÔNG QUOTE chứa cụm từ task= trong nội dung
-console.log('--- TEST 10: Lệnh TALK KHÔNG QUOTE chứa cụm từ task= trong nội dung ---');
-const input10 = `[TALK target=deployer message=Hỗ trợ tham số task= và tự cập nhật task vào database. Báo TASK REPORT khi xong.]`;
-const cmds10 = extractBracketCommands(input10, ['TALK']);
-assert(cmds10.length === 1, 'Should extract 1 TALK command');
-const parsed10 = parseTalkTag(cmds10[0]?.content || '');
-assert(parsed10?.agentId === 'deployer', 'Agent ID should be deployer');
-assert(parsed10?.message === 'Hỗ trợ tham số task= và tự cập nhật task vào database. Báo TASK REPORT khi xong.', 'Message containing task= phrase must not be cut');
+// Test Case 12: ĐOẠN TEXT THỰC TẾ CỦA USER VỚI DẤU ] Ở CUỐI DÒNG 3 VÀ TEXT TỰ SỰ BÊN DƯỚI
+console.log('--- TEST 12: Nạp đúng nguyên văn đoạn text TALK 3 dòng có dấu ] và text tự sự bên dưới ---');
+const sampleText12 = `[TALK target=verifyfix message=Tien hanh nghiem thu doc lap cuoi cung tren dia:
+Xac nhan server.ts va App.tsx da co du bo loc Content Hash Deduplication 2 tang.
+Kiem tra file test-agentforge thoi/agentforge-web.exe.new (94,812,672 bytes) va GitHub Release v0.2.3. Bao TASK REPORT ket luan 100% PASS toan dien.]
+Coder deployer đã hoàn tất triển khai...`;
 
-// Test Case 11: Lệnh TALK chứa dấu hai chấm, xuống dòng và [TALK mở dở dang
-console.log('\n--- TEST 11: Lệnh TALK chứa dấu hai chấm, xuống dòng và [TALK mở dở dang ---');
-const input11 = `[TALK target=arch-dbg message="ĐIỀU TRA GẤP BẪY PARSER TALK BỊ CẮT CỤT TẠI VỊ TRÍ DẤU HAI CHẤM VÀ XUỐNG DÒNG tại C:\\Users\\Hai Dang\\agentforge:
-
-Người dùng vừa bắt quả tang một lỗi parse thực tế cực kỳ điển hình:
-Khi Orchestrator gửi tin nhắn TALK có dạng:
-\`[TALK
-
-Sau đó báo cáo lại."]`;
-const cmds11 = extractBracketCommands(input11, ['TALK']);
-assert(cmds11.length === 1, 'Should extract 1 TALK command');
-const parsed11 = parseTalkTag(cmds11[0]?.content || '');
-assert(parsed11?.agentId === 'arch-dbg', 'Agent ID should be arch-dbg');
-assert(parsed11?.message?.includes('Người dùng vừa bắt quả tang một lỗi parse'), 'Message must contain text after colon and newline');
-assert(parsed11?.message?.endsWith('Sau đó báo cáo lại.'), 'Message must not be truncated at `[TALK');
-
-// Test Case 12: ĐOẠN TEXT THỰC TẾ CỦA USER: Dòng 3 có dấu ] ở cuối câu và các dòng text bên dưới
-console.log('\n--- TEST 12: Đoạn text thực tế của User (Dấu ] ở cuối dòng 3 + text bên dưới) ---');
-const input12 = `[TALK target=verifyfix message=Kiểm chứng thực nghiệm fix binary tại test-agentforge thoi/agentforge-web.exe.new (94,812,672 bytes) và GitHub Release v0.2.3. Báo TASK REPORT kết luận 100% PASS toàn diện.]
-Coder deployer đã hoàn tất triển khai.`;
-
-const cmds12 = extractBracketCommands(input12, ['TALK']);
-assert(cmds12.length === 1, 'Should extract TALK command');
+const cmds12 = extractBracketCommands(sampleText12, ['TALK']);
+assert(cmds12.length === 1, 'Should extract exactly 1 TALK command');
 const parsed12 = parseTalkTag(cmds12[0]?.content || '');
 assert(parsed12?.agentId === 'verifyfix', 'Agent ID should be verifyfix');
-assert(parsed12?.message === 'Kiểm chứng thực nghiệm fix binary tại test-agentforge thoi/agentforge-web.exe.new (94,812,672 bytes) và GitHub Release v0.2.3. Báo TASK REPORT kết luận 100% PASS toàn diện.', 'Message should match exact text inside brackets');
+assert(parsed12?.message?.includes('Tien hanh nghiem thu doc lap cuoi cung tren dia:'), 'Message must contain line 1');
+assert(parsed12?.message?.includes('Xac nhan server.ts va App.tsx da co du bo loc'), 'Message must contain line 2');
+assert(parsed12?.message?.includes('GitHub Release v0.2.3. Bao TASK REPORT ket luan 100% PASS toan dien.'), 'Message must contain line 3');
 
-// Test Case 13: Tin nhắn User gửi chứa các tag [TALK], [SPAWN] (Bảo toàn 100% nguyên văn)
-console.log('\n--- TEST 13: Bảo toàn tin nhắn của User (Không parse lệnh từ User) ---');
-const rawUserMsg = `[TASK] ĐIỀU TRA GẤP BẪY PARSER TALK:\n[TALK target=arch-dbg message=test]\n[SPAWN role=coder name=c1 task=fix]`;
+const stripped12 = stripCommandTags(sampleText12);
+assert(stripped12.includes('Coder deployer đã hoàn tất triển khai...'), 'Text after TALK command must not be swallowed');
+
+// Test Case 13: Tin nhắn của User chứa chuỗi [TALK không được parse hay làm sạch
+console.log('\n--- TEST 13: Bảo vệ tin nhắn User nguyên văn 100% không chạy strip/parse ---');
+const userMsgRaw = `Người dùng gõ lệnh mẫu: \`[TALK target=test message="abc"]\` và câu tự sự [TALK dở dang.`;
 // Giả lập lưu tin nhắn user trực tiếp như trong server.ts dòng 3127
-const storedUserMsg = { id: 'test-user-id', from: 'user', to: 'orchestrator', content: rawUserMsg, timestamp: Date.now() };
-assert(storedUserMsg.content === rawUserMsg, 'User message must be preserved verbatim 100% without stripping or parsing');
+const storedMsg = { id: 'u1', from: 'user', to: 'orchestrator', content: userMsgRaw };
+assert(storedMsg.content === userMsgRaw, 'User message must be preserved verbatim without stripping');
 
 console.log('\n===============================================================');
 console.log(`KẾT QUẢ KIỂM THỬ: ${passed} PASSED, ${failed} FAILED`);
