@@ -646,54 +646,40 @@ function clearAgentRetry(agentId: string) {
   agentRetryCount.delete(agentId);
 }
 
-// Đồng bộ title session opencode → Agent (tiêu đề khung chat) và thống kê tokens/context length
-// Retry up to 3 lần nếu title chưa sẵn sàng (opencode có thể tạo title async)
-async function syncSessionTitle(agent: Agent, client: ACPClient, retries = 3, isNewSession = false) {
+// Đồng bộ title session opencode → Agent (tiêu đề khung chat)
+// TỐI ƯU HÓA THÔNG MINH: Nếu agent ĐÃ CÓ TÊN RỒI -> return ngay lập tức (0 subprocess).
+// Chỉ fetch 1 lần duy nhất cho session mới tạo chưa có tên, sau khi lấy được lưu vĩnh viễn vào database.
+async function syncSessionTitle(agent: Agent, client: ACPClient, _retries = 1, isNewSession = false) {
+  if (agent.sessionTitle && agent.sessionTitle.trim().length > 0) {
+    return;
+  }
+
   const sid = client.getSessionId();
   if (!sid) return;
+
+  // Gán tên ngay trong memory từ task của agent nếu có để UI hiển thị tức thì
+  const defaultTitle = agent.task ? agent.task.slice(0, 60) : `Session ${sid.slice(-6)}`;
+  agent.sessionTitle = defaultTitle;
+  agent.sessionId = sid;
+  ACPClient.registerSession(agent.id, sid);
+  storage.updateAgent(agent.id, { sessionId: sid, sessionTitle: agent.sessionTitle });
+  broadcast('agent:updated', { agent });
   
-  // If this is a new session (sessionId changed), immediately set a timestamped title
-  if (isNewSession || sid !== agent.sessionId) {
-    const timestamp = new Date().toISOString();
-    const tempTitle = `New session - ${timestamp}`;
-    agent.sessionTitle = tempTitle;
-    agent.sessionId = sid;
-    ACPClient.registerSession(agent.id, sid);
-    storage.updateAgent(agent.id, { sessionId: sid, sessionTitle: tempTitle });
-    broadcast('agent:updated', { agent });
-    console.log(`[Title] New session for ${agent.name}: ${tempTitle}`);
-  }
-  
-  for (let attempt = 0; attempt < retries; attempt++) {
+  // Thử lấy title async từ opencode 1 lần duy nhất trong nền nếu cần
+  try {
     const stats = await client.getSessionStats(sid);
-    if (stats && stats.title) {
+    if (stats && stats.title && stats.title !== agent.sessionTitle) {
       agent.sessionTitle = stats.title;
       agent.sessionId = sid;
-      if (stats.tokenUsage) {
-        agent.tokenUsage = stats.tokenUsage;
-      }
-      if (stats.contextLength) agent.contextLength = stats.contextLength;
       ACPClient.registerSession(agent.id, sid);
       storage.updateAgent(agent.id, { 
         sessionId: sid, 
-        sessionTitle: stats.title,
-        tokenUsage: agent.tokenUsage,
-        contextLength: agent.contextLength
+        sessionTitle: stats.title
       });
       broadcast('agent:updated', { agent });
-      return;
+      console.log(`[Title] Resolved permanent session title for ${agent.name}: "${stats.title}"`);
     }
-    // Title chưa sẵn sàng — chờ rồi thử lại (0.5s, 1s, 2s — nhanh hơn)
-    if (attempt < retries - 1) {
-      await new Promise(r => setTimeout(r, (attempt + 1) * 500));
-    }
-  }
-  // Vẫn cập nhật sessionId kể cả không lấy được title (tránh mất session)
-  if (!agent.sessionId) {
-    agent.sessionId = sid;
-    ACPClient.registerSession(agent.id, sid);
-    storage.updateAgent(agent.id, { sessionId: sid });
-  }
+  } catch {}
 }
 
 function resolveOrchestratorModel(): string | undefined {
@@ -1818,7 +1804,9 @@ async function processOrchestratorTriggerQueue() {
             ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
             ...(result.contextLength ? { contextLength: result.contextLength } : {})
           });
-          syncSessionTitle(orchAgent, client, 3, isNewSession).catch(() => {});
+          if (isNewSession || !orchAgent.sessionTitle) {
+            syncSessionTitle(orchAgent, client, 1, isNewSession).catch(() => {});
+          }
         } else if (result.tokenUsage || result.contextLength) {
           storage.updateAgent(orchId, {
             ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
@@ -2077,7 +2065,9 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
       contextLength: targetAgent.contextLength
     });
     broadcast('agent:updated', { agent: targetAgent });
-    syncSessionTitle(targetAgent, tc, 3, isNewSession).catch(() => {});
+    if (isNewSession || !targetAgent.sessionTitle) {
+      syncSessionTitle(targetAgent, tc, 1, isNewSession).catch(() => {});
+    }
 
     // Gửi thành công → đánh dấu delivered (xóa khỏi outbox)
     storage.markOutboxDelivered(reportId);
@@ -2908,7 +2898,9 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         contextLength: targetAgent.contextLength
       });
       broadcast('agent:updated', { agent: targetAgent });
-      syncSessionTitle(targetAgent, client, 3, isNewSession).catch(() => {});
+      if (isNewSession || !targetAgent.sessionTitle) {
+        syncSessionTitle(targetAgent, client, 1, isNewSession).catch(() => {});
+      }
     } else {
       const orchAgent = agents.get('orchestrator');
       if (orchAgent) {
@@ -2923,7 +2915,9 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
           tokenUsage: orchAgent.tokenUsage,
           contextLength: orchAgent.contextLength
         });
-        syncSessionTitle(orchAgent, client, 3, isNewSession).catch(() => {});
+        if (isNewSession || !orchAgent.sessionTitle) {
+          syncSessionTitle(orchAgent, client, 1, isNewSession).catch(() => {});
+        }
       }
       ACPClient.registerSession('orchestrator', sid);
     }
