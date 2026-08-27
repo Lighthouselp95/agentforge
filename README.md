@@ -47,7 +47,7 @@ npm run dev
 # Open browser
 open http://localhost:3001
 ```
-
+Oneshot run: Agentforge-web.exe release
 ## Usage
 
 1. **Chat**: Type a message → Orchestrator decomposes, spawns specialist agents, routes tasks
