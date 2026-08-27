@@ -601,13 +601,12 @@ function broadcastOACEvent(agentId: string, ev: any) {
   }
 }
 
-// Lưu transcript nguyên văn 1 lượt làm việc của agent (tool calls + text) thành message riêng
+// Lưu transcript nguyên văn 1 lượt làm việc của agent (tool calls + text) âm thầm vào storage nếu cần
 function saveTranscript(result: any, fromId: string, agentName?: string, agentRole?: string) {
   if (!result?.transcript) return;
-  // Transcript là chi tiết công việc của agent → hiện trong khung chat của AGENT, KHÔNG vào khung main/orchestrator
+  // Transcript lưu vào storage để audit/replay, TUYỆT ĐỐI KHÔNG broadcast đè lên UI gây nhân đôi bong bóng chat
   const tMsg: ChatMsg = { id: uuidv4(), from: fromId, to: fromId, content: result.transcript, timestamp: Date.now(), agentName, agentRole, msgType: 'transcript' };
-  chatHistory.push(tMsg); storage.saveMessage(tMsg);
-  broadcast('chat:message', { msg: tMsg });
+  storage.saveMessage(tMsg);
 }
 
 // Chấp nhận MỌI biến thể báo cáo chuẩn của các role (task/research/verification/error)
@@ -717,6 +716,15 @@ function getClient(agent: Agent): ACPClient {
   if (!clients.has(agent.id)) {
     const c = new ACPClient({ id: agent.id, name: agent.name, role: agent.role, type: 'worker', projectDir: agent.projectDir, model });
     c.setOnEvent((ev: any) => broadcastOACEvent(agent.id, ev));
+    c.setOnStatusChange((busy) => {
+      const cur = agents.get(agent.id);
+      if (cur) {
+        cur.status = busy ? 'working' : 'idle';
+        cur.workingSince = busy ? (cur.workingSince || Date.now()) : undefined;
+        storage.updateAgent(cur.id, { status: cur.status, workingSince: cur.workingSince || null });
+        broadcast('agent:updated', { agent: cur });
+      }
+    });
     clients.set(agent.id, c);
   } else {
     const c = clients.get(agent.id)!;
@@ -1880,9 +1888,9 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
     const targetOrchId = resolveOrchestratorTarget(fromAgent);
     const isToOrchestrator = msg.to === 'orchestrator' || msg.to === targetOrchId || (agents.get(msg.to)?.type === 'orchestrator');
     const resolvedTo = (msg.to === 'orchestrator') ? targetOrchId : msg.to;
-    const outContent = isToOrchestrator
+    const outContent = (isToOrchestrator || fromAgent.type === 'worker') && /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/i.test(msg.message)
       ? extractCleanTaskReport(stripToolNoiseForOrchestrator(msg.message))
-      : msg.message;
+      : (isToOrchestrator ? extractCleanTaskReport(stripToolNoiseForOrchestrator(msg.message)) : msg.message);
 
     const reply: ChatMsg = {
       id: uuidv4(),
@@ -1892,11 +1900,7 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
       timestamp: Date.now(),
       agentName: fromAgent.name,
       agentRole: fromAgent.role,
-      msgType: isInternal ? 'talk' : undefined,
-      // Toolcall cấu trúc LUÔN được lưu & gửi đầy đủ cho mọi kênh (kể cả Orchestrator/main)
-      ...(toolCalls && toolCalls.length ? { toolCalls } : {}),
-      // Thinking nội bộ LUÔN gửi kèm (toàn tuyến) — UI render hộp mờ riêng
-      ...(thinking ? { thinking } : {})
+      msgType: isInternal ? 'talk' : undefined
     };
     chatHistory.push(reply);
     storage.saveMessage(reply);
@@ -2441,15 +2445,27 @@ function getOrchClient(orchId: string = 'orchestrator'): ACPClient {
   const targetAgent = agents.get(orchId) || (storage.getAgent(orchId) as any);
   const model = isMain ? resolveOrchestratorModel() : resolveModelForAgent(targetAgent || { id: orchId, name: 'Orchestrator', role: 'orchestrator', type: 'orchestrator', createdAt: Date.now() });
   if (!clients.has(orchId)) {
-    clients.set(orchId, new ACPClient({
+    const c = new ACPClient({
       id: orchId,
       name: targetAgent?.name || (isMain ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`),
       role: 'orchestrator',
       type: 'orchestrator',
       projectDir: targetAgent?.projectDir,
       model
-    }));
-    clients.get(orchId)!.setOnEvent((ev: any) => broadcastOACEvent(orchId, ev));
+    });
+    c.setOnEvent((ev: any) => broadcastOACEvent(orchId, ev));
+    c.setOnStatusChange((busy) => {
+      let orch = agents.get(orchId);
+      if (!orch) {
+        orch = { id: orchId, name: (isMain ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'idle', createdAt: Date.now() };
+        agents.set(orchId, orch);
+      }
+      orch.status = busy ? 'working' : 'idle';
+      orch.workingSince = busy ? (orch.workingSince || Date.now()) : undefined;
+      storage.updateAgent(orchId, { status: orch.status, workingSince: orch.workingSince || null });
+      broadcast('agent:updated', { agent: orch });
+    });
+    clients.set(orchId, c);
   } else {
     const c = clients.get(orchId)!;
     if (model) c.setModel(model);
@@ -2834,6 +2850,20 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     const injectRes = await client.injectPromptAsync(finalPrompt);
     if (injectRes.success) {
       console.log(`[Inject] Injected prompt silently into session ${client.getSessionId()} (PID: ${injectRes.pid}) while main turn continues.`);
+      if (targetAgent) {
+        targetAgent.status = 'working';
+        targetAgent.workingSince = targetAgent.workingSince || Date.now();
+        storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
+        broadcast('agent:updated', { agent: targetAgent });
+      } else {
+        const orch = agents.get(resolvedTargetId || 'orchestrator');
+        if (orch) {
+          orch.status = 'working';
+          orch.workingSince = orch.workingSince || Date.now();
+          storage.updateAgent(orch.id, { status: 'working', workingSince: orch.workingSince });
+          broadcast('agent:updated', { agent: orch });
+        }
+      }
       return {
         response: '',
         sid: client.getSessionId(),

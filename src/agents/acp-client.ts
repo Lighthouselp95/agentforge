@@ -45,6 +45,7 @@ export class ACPClient {
   private aborting = false; // Idempotency guard for abort()
   private needPromptReinject = false;
   private unprocessedPrompts: string[] = [];
+  private onStatusChange?: (busy: boolean) => void;
 
   // Streaming terminal I/O của opencode lên UI (input prompt + từng dòng JSONL output)
   private onEvent?: (ev: any) => void;
@@ -60,6 +61,10 @@ export class ACPClient {
   /** Gắn callback để nhận từng sự kiện terminal (input + output JSONL) của opencode */
   setOnEvent(cb: (ev: any) => void) {
     this.onEvent = cb;
+  }
+
+  setOnStatusChange(cb: (busy: boolean) => void) {
+    this.onStatusChange = cb;
   }
 
   setNeedPromptReinject(val: boolean = true) {
@@ -408,6 +413,10 @@ export class ACPClient {
   private async runQueued(prompt: string): Promise<AgentMessage> {
     this.busy = true;
     try {
+      this.onStatusChange?.(true);
+    } catch {}
+
+    try {
       return await this.chat(prompt);
     } finally {
       this.busy = false;
@@ -425,6 +434,10 @@ export class ACPClient {
             batch.forEach(b => b.reject(err));
           });
         }
+      } else {
+        try {
+          this.onStatusChange?.(false);
+        } catch {}
       }
     }
   }
