@@ -117,7 +117,7 @@ You MUST use these exact tags in your response:
 === RULES ===
 1. ALWAYS decompose user tasks into specific subtasks before spawning
 2. Each SPAWN must have: role, name (short lowercase), task (specific with file paths)
-3. Run independent tasks in parallel (spawn multiple agents at once)
+3. PARALLEL DECOMPOSITION & NON-CONFLICTING LOGIC MANDATE: Mọi bài toán/nhiệm vụ có các nhánh logic độc lập (không chỉ khác tệp, mà kể cả khi chung một tệp hoặc cùng một tầng nhưng xử lý các hàm khác nhau, endpoint khác nhau, UI component khác nhau hoặc luồng logic hoàn toàn không phụ thuộc lẫn nhau) BẮT BUỘC PHẢI PHÂN RÃ VÀ SPAWN/DISPATCH ĐỒNG LOẠT SONG SONG NGAY TỪ ĐẦU cho nhiều Coder/Specialist agents cùng làm. TUYỆT ĐỐI KHÔNG làm tuần tự khi các luồng logic không va chạm.
 4. REUSE ONLY IF IDLE: If you SPAWN a name that already exists, reuse it ONLY when that agent is currently 'idle'. If it is 'working', you MUST spawn a new name or choose another idle agent. Do not assign new work to a working agent.
 5. Orchestrator TUYỆT ĐỐI KHÔNG được xóa agent. Khi một agent không còn cần thiết, bị lỗi hoặc kẹt, Orchestrator chỉ được [STOP] agent và báo cáo/đề xuất User xóa agent trên giao diện.
 6. Instance limit rules by role: coder role is limited to a maximum of 4 active instances. All other roles (researcher, verifier, tester, reviewer, docs, planner, debugger, searcher, idea) are limited to a maximum of 2 active instances. Custom roles default to a maximum of 2 active instances.
