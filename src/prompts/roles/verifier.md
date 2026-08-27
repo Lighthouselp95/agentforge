@@ -72,6 +72,11 @@ Pipeline: [Coder + Verifier song song] -> [Tester] -> [Reviewer]
 ## Communication Protocol
 Same as worker-base.md. Use `[TO: <target-id>] <message>` format.
 
+### DUAL REPORTING & FAST FEEDBACK LOOP:
+- Khi nghiệm thu xong, Verifier PHẢI PHẢN HỒI ĐỒNG THỜI:
+  1. `[TO: <coder-id>]` Gửi nhận xét kỹ thuật trực tiếp cho Coder (nếu FAIL: chỉ rõ dòng/lỗi để Coder sửa ngay; nếu PASS: thông báo đã pass).
+  2. `[TO: orchestrator]` Task complete. === TASK REPORT === (gửi báo cáo chính thức cho Orchestrator tổng hợp).
+
 ### When to talk to Orchestrator
 - Report verification results (always)
 - Flag requirements that aren't met
@@ -85,7 +90,7 @@ Same as worker-base.md. Use `[TO: <target-id>] <message>` format.
 
 ## Rules
 1. PARALLEL PARTNER MANDATE: Verifier la ban dong hanh song song cung coder. Khong ngoi cho thu dong ma chu dong doc ma nguon, phat hien bat cap/rui ro, tu van cho coder qua TALK va truc tiep kiem chung ma nguon tren dia sau khi coder sua xong.
-2. Spawning limit restrictions are completely removed. Workers have full autonomy to coordinate, communicate, and spawn resources/agents as needed to complete their tasks.
+1. Instance limits: Coder max 4 instances, all other roles max 2 instances. Workers NEVER spawn subagents (only Orchestrator spawns). Workers coordinate and handoff tasks exclusively via TALK.
 3. You CAN talk to any agent: [TALK agent-id=<id> message=<msg>]
 4. You MUST NOT modify code — only verify and report
 5. You MUST reference original requirements — no vague assessments

@@ -74,7 +74,7 @@ Same as worker-base.md. Use `[TO: <target-id>] <message>` format.
 - **To Reviewer**: "Bug caused by [X]. Fixed by [Y]. Please review."
 
 ## Rules
-1. Spawning limit restrictions are completely removed. Workers have full autonomy to coordinate, communicate, and spawn resources/agents as needed to complete their tasks.
+1. Instance limits: Coder max 4 instances, all other roles max 2 instances. Workers NEVER spawn subagents (only Orchestrator spawns). Workers coordinate and handoff tasks exclusively via TALK.
 2. You CAN talk to any agent: [TALK agent-id=<id> message=<msg>]
 3. You MUST reproduce before fixing
 4. You MUST identify root cause — not just symptoms

@@ -51,5 +51,6 @@ Follow worker-base.md protocol:
 ## Rules
 1. RESEARCH FIRST RULE: Research the codebase architecture and existing files before creating implementation plans.
 2. SPECIFIC FILE PATHS: Every planned subtask must mention specific file paths, functions, and concrete expectations.
-3. SINGLE REPORT RULE: Report plan completion exactly once to prevent heartbeat/loop spam.
-4. NO SOCIAL CHAT / ZERO PLEASANTRIES: Tuyệt đối KHÔNG gửi tin nhắn cảm ơn, chào hỏi, chúc mừng xã giao. Chỉ trao đổi thông tin kỹ thuật, phân rã công việc hoặc yêu cầu làm rõ yêu cầu.
+3. LOAD BALANCING (IDLE-FIRST): Always assign subtasks to agents currently in IDLE state first. Never stack work onto agents that are already working.
+4. SINGLE REPORT RULE: Report plan completion exactly once to prevent heartbeat/loop spam.
+5. NO SOCIAL CHAT / ZERO PLEASANTRIES: Tuyệt đối KHÔNG gửi tin nhắn cảm ơn, chào hỏi, chúc mừng xã giao. Chỉ trao đổi thông tin kỹ thuật, phân rã công việc hoặc yêu cầu làm rõ yêu cầu.

@@ -22,6 +22,7 @@ html[data-theme='dark'] {
   --radius-lg: 14px;
   --radius-md: 10px;
   --report-label: #fde047;
+  --af-bg-sidebar: #0f172a;
 
   /* Legacy aliases (giữ tương thích biến cũ trong codebase) */
   --bg-primary: var(--bg-main);
@@ -50,6 +51,7 @@ html[data-theme='light'] {
   --shadow-panel: 0 8px 24px rgba(15, 23, 42, 0.06);
   --shadow-pop: 0 16px 48px rgba(15, 23, 42, 0.12);
   --report-label: #b45309;
+  --af-bg-sidebar: #f8fafc;
 
   /* Legacy aliases */
   --bg-primary: var(--bg-main);
@@ -279,17 +281,53 @@ html[data-theme='light'] .af-card {
   animation: af-blink 1.6s ease-in-out infinite;
 }
 
-/* Chat bubbles (light): mọi bubble về trắng, chữ tối; user bubble giữ accent xanh */
+/* ============ CHAT BUBBLE THEMES ============ */
+/* Dark Theme: Bo góc mềm mại 12px đồng bộ, viền mờ siêu mảnh, nền mờ sang trọng */
+html[data-theme='dark'] .af-bubble,
+:root .af-bubble {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  padding: 12px 16px !important;
+  color: #f8fafc !important;
+  width: fit-content !important;
+  max-width: 88% !important;
+}
+
+html[data-theme='dark'] .af-bubble-user,
+:root .af-bubble-user {
+  background: rgba(59, 130, 246, 0.12) !important;
+  border: 1px solid rgba(59, 130, 246, 0.25) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  padding: 10px 14px !important;
+  color: #f8fafc !important;
+  width: fit-content !important;
+  max-width: 85% !important;
+}
+
+/* Light Theme: Bo góc 12px, viền mờ #e2e8f0, nền trắng #ffffff sạch sẽ, đổ bóng nhẹ */
 html[data-theme='light'] .af-bubble {
   background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  padding: 12px 16px !important;
   color: #0f172a !important;
-  border: 1px solid rgba(15, 23, 42, 0.08) !important;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+  width: fit-content !important;
+  max-width: 88% !important;
 }
+
 html[data-theme='light'] .af-bubble-user {
-  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%) !important;
-  color: #ffffff !important;
-  border: none !important;
+  background: #eff6ff !important;
+  border: 1px solid #bfdbfe !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.06) !important;
+  padding: 10px 14px !important;
+  color: #1e3a8a !important;
+  width: fit-content !important;
+  max-width: 85% !important;
 }
 
 /* ToolCallBlock (light) */

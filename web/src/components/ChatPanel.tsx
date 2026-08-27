@@ -255,6 +255,653 @@ function AnsiRenderer({ text }: { text: string }) {
   return <>{out}</>;
 }
 
+// ============ MARKDOWN RENDERER ============
+function getLangBadge(lang: string) {
+  const l = (lang || '').toLowerCase().trim();
+  if (l === 'ts' || l === 'tsx' || l === 'typescript') return <span style={{ background: '#3178c6', color: '#ffffff', padding: '1px 5px', borderRadius: 3, fontWeight: 700, fontSize: 10, marginRight: 6 }}>TS</span>;
+  if (l === 'js' || l === 'jsx' || l === 'javascript') return <span style={{ background: '#f7df1e', color: '#000000', padding: '1px 5px', borderRadius: 3, fontWeight: 700, fontSize: 10, marginRight: 6 }}>JS</span>;
+  if (l === 'bash' || l === 'sh' || l === 'shell' || l === 'zsh') return <span style={{ color: '#22c55e', fontWeight: 700, fontSize: 11, marginRight: 6 }}>&gt;_</span>;
+  if (l === 'json') return <span style={{ color: '#f97316', fontWeight: 700, fontSize: 11, marginRight: 6 }}>&#123; &#125;</span>;
+  if (l === 'py' || l === 'python') return <span style={{ marginRight: 6 }}>🐍</span>;
+  if (l === 'html' || l === 'xml') return <span style={{ marginRight: 6 }}>🌐</span>;
+  if (l === 'css' || l === 'scss') return <span style={{ marginRight: 6 }}>🎨</span>;
+  if (l === 'md' || l === 'markdown') return <span style={{ marginRight: 6 }}>📝</span>;
+  return <span style={{ marginRight: 6 }}>📄</span>;
+}
+
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  return (
+    <div style={{
+      borderRadius: 8,
+      border: '1px solid var(--af-border)',
+      background: 'var(--bg-inset)',
+      margin: '8px 0',
+      overflow: 'hidden',
+      width: '100%',
+      boxSizing: 'border-box'
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '6px 12px',
+        background: 'rgba(255, 255, 255, 0.03)',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+        fontSize: 11,
+        color: 'var(--text-secondary)',
+        fontFamily: 'monospace'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          {getLangBadge(lang)}
+          <span style={{ fontWeight: 600, textTransform: 'lowercase' }}>{lang || 'code'}</span>
+        </div>
+        <button
+          onClick={handleCopy}
+          style={{
+            background: copied ? 'rgba(34, 197, 94, 0.15)' : 'transparent',
+            border: copied ? '1px solid rgba(34, 197, 94, 0.3)' : 'none',
+            color: copied ? '#10b981' : '#93c5fd',
+            borderRadius: 4,
+            padding: '2px 6px',
+            fontSize: 11,
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            transition: 'all 0.15s ease'
+          }}
+        >
+          <span>{copied ? '✓' : '📋'}</span>
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre style={{
+        margin: 0,
+        padding: '10px 14px',
+        overflowX: 'auto',
+        fontSize: 12.5,
+        lineHeight: 1.55,
+        color: 'var(--text-primary)',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+      }}>
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+function ReportCard({ title, content }: { title: string; content: string }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+  const parsedFields: Array<{ label: string; value: string }> = [];
+  let currentLabel = '';
+  let currentValue = '';
+
+  for (const line of lines) {
+    const match = line.match(/^([A-Z_0-9]+):\s*(.*)$/);
+    if (match) {
+      if (currentLabel) {
+        parsedFields.push({ label: currentLabel, value: currentValue.trim() });
+      }
+      currentLabel = match[1];
+      currentValue = match[2] || '';
+    } else {
+      if (currentLabel) {
+        currentValue += (currentValue ? '\n' : '') + line;
+      } else {
+        currentLabel = 'CONTENT';
+        currentValue = line;
+      }
+    }
+  }
+  if (currentLabel) {
+    parsedFields.push({ label: currentLabel, value: currentValue.trim() });
+  }
+
+  return (
+    <div style={{
+      borderRadius: 8,
+      border: '1px solid var(--af-border)',
+      background: 'rgba(255, 255, 255, 0.02)',
+      margin: '8px 0',
+      overflow: 'hidden'
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '8px 12px',
+        background: 'var(--bg-panel)',
+        borderBottom: '1px solid var(--af-border)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 12.5, color: 'var(--text-primary)' }}>
+          <span>📋</span>
+          <span>{title || 'Structured Task Report'}</span>
+        </div>
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          style={{
+            background: 'var(--bg-input)',
+            border: '1px solid var(--af-border)',
+            color: 'var(--text-secondary)',
+            borderRadius: 4,
+            padding: '2px 8px',
+            fontSize: 11,
+            cursor: 'pointer'
+          }}
+        >
+          {collapsed ? 'Mở rộng' : 'Thu gọn'}
+        </button>
+      </div>
+
+      {/* Body */}
+      {!collapsed && (
+        <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+          {parsedFields.map((field, fIdx) => {
+            const isStatus = field.label === 'STATUS';
+            const isCompleted = field.value.toLowerCase().includes('completed') || field.value.toLowerCase().includes('passed');
+            const isError = field.value.toLowerCase().includes('blocked') || field.value.toLowerCase().includes('failed') || field.value.toLowerCase().includes('error');
+            
+            return (
+              <div key={fIdx} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+                  {field.label}:
+                </div>
+                <div style={{ paddingLeft: 4, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
+                  {isStatus ? (
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: 0,
+                      fontWeight: 600,
+                      fontSize: 12,
+                      background: 'transparent',
+                      border: 'none',
+                      color: isCompleted ? '#10b981' : isError ? '#f87171' : 'var(--text-secondary)'
+                    }}>
+                      {isCompleted ? '✓ ' : isError ? '✕ ' : ''}{field.value}
+                    </span>
+                  ) : (
+                    renderInlineMarkdown(field.value)
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const regex = /(`[^`]+`|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\([^)]+\))/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    const key = `inline-${match.index}-${token.length}`;
+
+    if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(
+        <code key={key} style={{
+          background: 'rgba(255, 255, 255, 0.08)',
+          color: '#93c5fd',
+          padding: '2px 6px',
+          borderRadius: 4,
+          fontSize: '0.9em',
+          fontFamily: 'monospace'
+        }}>
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith('***') && token.endsWith('***')) {
+      nodes.push(<strong key={key} style={{ color: 'var(--text-primary)', fontWeight: 700 }}><em>{token.slice(3, -3)}</em></strong>);
+    } else if ((token.startsWith('**') && token.endsWith('**')) || (token.startsWith('__') && token.endsWith('__'))) {
+      nodes.push(<strong key={key} style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{token.slice(2, -2)}</strong>);
+    } else if ((token.startsWith('*') && token.endsWith('*')) || (token.startsWith('_') && token.endsWith('_'))) {
+      nodes.push(<em key={key}>{token.slice(1, -1)}</em>);
+    } else if (token.startsWith('~~') && token.endsWith('~~')) {
+      nodes.push(<del key={key} style={{ opacity: 0.6 }}>{token.slice(2, -2)}</del>);
+    } else if (token.startsWith('[') && token.includes('](')) {
+      const parts = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (parts) {
+        nodes.push(
+          <a key={key} href={parts[2]} target="_blank" rel="noreferrer" style={{ color: '#60a5fa', textDecoration: 'underline' }}>
+            {parts[1]}
+          </a>
+        );
+      } else {
+        nodes.push(token);
+      }
+    } else {
+      nodes.push(token);
+    }
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
+function splitMarkdownSections(content: string): Array<{ type: 'code' | 'md'; content: string; lang?: string }> {
+  const sections: Array<{ type: 'code' | 'md'; content: string; lang?: string }> = [];
+  const lines = content.split(/\r?\n/);
+  
+  let inCode = false;
+  let codeFenceLength = 0;
+  let codeLang = '';
+  let codeLines: string[] = [];
+  let mdLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    if (!inCode) {
+      // Check for code fence opening (3 or more backticks or tildes, optional leading indentation)
+      const match = line.match(/^\s*(`{3,}|~{3,})([a-zA-Z0-9_+#.-]*)\s*$/);
+      if (match) {
+        if (mdLines.length > 0) {
+          sections.push({ type: 'md', content: mdLines.join('\n') });
+          mdLines = [];
+        }
+        inCode = true;
+        codeFenceLength = match[1].length;
+        codeLang = match[2] || '';
+        codeLines = [];
+      } else {
+        mdLines.push(line);
+      }
+    } else {
+      // In code: check for closing fence with exact codeFenceLength backticks/tildes on its own line
+      const closeMatch = line.match(/^\s*(`{3,}|~{3,})\s*$/);
+      if (closeMatch && closeMatch[1].length === codeFenceLength) {
+        sections.push({ type: 'code', lang: codeLang, content: codeLines.join('\n') });
+        inCode = false;
+        codeFenceLength = 0;
+        codeLang = '';
+        codeLines = [];
+      } else {
+        codeLines.push(line);
+      }
+    }
+  }
+
+  if (inCode) {
+    // Unclosed code block - treat as code
+    sections.push({ type: 'code', lang: codeLang, content: codeLines.join('\n') });
+  } else if (mdLines.length > 0) {
+    sections.push({ type: 'md', content: mdLines.join('\n') });
+  }
+
+  return sections;
+}
+
+function MarkdownRenderer({ content, isReport }: { content: string; isReport?: boolean }) {
+  if (!content) return null;
+
+  const sections = splitMarkdownSections(content);
+  const skipReportBlock = Boolean(isReport);
+
+  return (
+    <div className="af-markdown" style={{ display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.6 }}>
+      {sections.map((sec, secIdx) => {
+        if (sec.type === 'code') {
+          return <CodeBlock key={`sec-${secIdx}`} code={sec.content} lang={sec.lang || ''} />;
+        }
+
+        // Process markdown lines
+        const lines = sec.content.split(/\r?\n/);
+        const elements: React.ReactNode[] = [];
+        let i = 0;
+
+        while (i < lines.length) {
+          const line = lines[i];
+          const trimmed = line.trim();
+
+          // Empty line
+          if (!trimmed) {
+            i++;
+            continue;
+          }
+
+          // Structured Report Block: === TASK REPORT === ... === END REPORT ===
+          const reportMatch = trimmed.match(/^===\s*([A-Z_ ]+REPORT)\s*===/i);
+          if (reportMatch && !skipReportBlock) {
+            const reportTitle = reportMatch[1].trim();
+            const reportLines: string[] = [];
+            i++; // skip start marker
+            while (i < lines.length && !lines[i].trim().match(/^===\s*END/i)) {
+              reportLines.push(lines[i]);
+              i++;
+            }
+            if (i < lines.length && lines[i].trim().match(/^===\s*END/i)) {
+              i++; // skip end marker
+            }
+            elements.push(
+              <ReportCard key={`report-${i}`} title={reportTitle} content={reportLines.join('\n')} />
+            );
+            continue;
+          }
+          if (reportMatch && skipReportBlock) {
+            // Hide report markers entirely when the outer report card already handles them
+            i++;
+            while (i < lines.length && !lines[i].trim().match(/^===\s*END/i)) { i++; }
+            if (i < lines.length && lines[i].trim().match(/^===\s*END/i)) { i++; }
+            continue;
+          }
+
+          // Markdown Headers (Modern Cursor / Claude Style)
+          if (line.startsWith('# ')) {
+            elements.push(<h1 key={`h1-${i}`} style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em', margin: '10px 0 4px', color: 'var(--text-primary)', borderBottom: '1px solid var(--af-border)', paddingBottom: 3 }}>{renderInlineMarkdown(line.slice(2))}</h1>);
+            i++;
+            continue;
+          }
+          if (line.startsWith('## ')) {
+            elements.push(<h2 key={`h2-${i}`} style={{ fontSize: 13.5, fontWeight: 600, margin: '8px 0 3px', color: 'var(--text-primary)' }}>{renderInlineMarkdown(line.slice(3))}</h2>);
+            i++;
+            continue;
+          }
+          if (line.startsWith('### ')) {
+            elements.push(<h3 key={`h3-${i}`} style={{ fontSize: 13, fontWeight: 600, margin: '6px 0 2px', color: 'var(--text-primary)' }}>{renderInlineMarkdown(line.slice(4))}</h3>);
+            i++;
+            continue;
+          }
+          if (line.startsWith('#### ')) {
+            elements.push(<h4 key={`h4-${i}`} style={{ fontSize: 13, fontWeight: 600, margin: '6px 0 2px', color: 'var(--text-primary)' }}>{renderInlineMarkdown(line.slice(5))}</h4>);
+            i++;
+            continue;
+          }
+
+          // Plain text headers (all caps or ending with colon like 'BÁO CÁO:' or 'Nguyên nhân:')
+          const isAllCapsHeader = /^[A-Z0-9_\sÀ-ỸÁ-ỴĂ-ỮĐ]{3,}:?\s*$/.test(trimmed) && trimmed.length > 2 && trimmed.length < 80 && !trimmed.startsWith('HTTP');
+          const isColonHeader = /^([A-ZÀ-Ỹa-zà-ỹ0-9_ -]{2,50}):$/.test(trimmed);
+          if (isAllCapsHeader || isColonHeader) {
+            elements.push(
+              <div key={`head-${i}`} style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginTop: 6, marginBottom: 2 }}>
+                {renderInlineMarkdown(line)}
+              </div>
+            );
+            i++;
+            continue;
+          }
+
+          // Horizontal rule
+          if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
+            elements.push(<hr key={`hr-${i}`} style={{ border: 'none', borderTop: '1px solid var(--af-border)', margin: '14px 0' }} />);
+            i++;
+            continue;
+          }
+
+          // Blockquote
+          if (line.startsWith('> ') || line === '>') {
+            const bqLines: string[] = [];
+            while (i < lines.length && (lines[i].startsWith('> ') || lines[i] === '>')) {
+              bqLines.push(lines[i].replace(/^>\s?/, ''));
+              i++;
+            }
+            elements.push(
+              <blockquote key={`bq-${i}`} style={{
+                borderLeft: '3px solid #3b82f6',
+                background: 'rgba(59, 130, 246, 0.08)',
+                padding: '6px 12px',
+                margin: '6px 0',
+                borderRadius: '0 6px 6px 0',
+                color: 'var(--text-secondary)'
+              }}>
+                {bqLines.map((bql, bqIdx) => <div key={bqIdx}>{renderInlineMarkdown(bql)}</div>)}
+              </blockquote>
+            );
+            continue;
+          }
+
+          // Table
+          if (trimmed.startsWith('|') && trimmed.endsWith('|') && i + 1 < lines.length && lines[i + 1].includes('---')) {
+            const tableLines: string[] = [];
+            while (i < lines.length && lines[i].trim().startsWith('|') && lines[i].trim().endsWith('|')) {
+              tableLines.push(lines[i].trim());
+              i++;
+            }
+            if (tableLines.length >= 2) {
+              const headerCols = tableLines[0].slice(1, -1).split('|').map(c => c.trim());
+              const bodyRows = tableLines.slice(2).map(r => r.slice(1, -1).split('|').map(c => c.trim()));
+              elements.push(
+                <div key={`tbl-${i}`} style={{ overflowX: 'auto', margin: '8px 0' }}>
+                  <table style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    fontSize: 12.5,
+                    border: '1px solid var(--af-border)',
+                    borderRadius: 6
+                  }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg-inset)' }}>
+                        {headerCols.map((hc, hcIdx) => (
+                          <th key={hcIdx} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--af-border)', color: 'var(--text-primary)' }}>
+                            {renderInlineMarkdown(hc)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bodyRows.map((row, rowIdx) => (
+                        <tr key={rowIdx} style={{ background: rowIdx % 2 === 1 ? 'rgba(255,255,255,0.02)' : 'transparent', borderBottom: '1px solid var(--af-border)' }}>
+                          {row.map((cell, cellIdx) => (
+                            <td key={cellIdx} style={{ padding: '6px 10px', color: 'var(--text-secondary)' }}>
+                              {renderInlineMarkdown(cell)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+              continue;
+            }
+          }
+
+          // Unordered List (standard markdown spec, multi-level indentation)
+          if (/^(\s*)[*+-•\u2022]\s+/.test(line)) {
+            const listItems: Array<{ text: string; isNested: boolean }> = [];
+            while (i < lines.length && /^(\s*)[*+-•\u2022]\s+/.test(lines[i])) {
+              const rawLine = lines[i];
+              const isNested = /^\s{2,}[*+-•\u2022]\s+/.test(rawLine) || /^\t+[*+-•\u2022]\s+/.test(rawLine);
+              listItems.push({
+                text: rawLine.replace(/^(\s*)[*+-•\u2022]\s+/, ''),
+                isNested
+              });
+              i++;
+            }
+            elements.push(
+              <div key={`ul-${i}`} style={{ margin: '4px 0 6px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {listItems.map((li, liIdx) => (
+                  <div key={liIdx} style={{ paddingLeft: li.isNested ? 32 : 16, lineHeight: 1.55 }}>
+                    {renderInlineMarkdown(li.text)}
+                  </div>
+                ))}
+              </div>
+            );
+            continue;
+          }
+
+          // Ordered List (standard markdown spec, multi-level indentation)
+          if (/^\s*\d+\.\s+/.test(line)) {
+            const listItems: Array<{ num: string; text: string; isNested: boolean }> = [];
+            while (i < lines.length && /^\s*(\d+)\.\s+(.*)$/.test(lines[i])) {
+              const rawLine = lines[i];
+              const isNested = /^\s{2,}\d+\.\s+/.test(rawLine) || /^\t+\d+\.\s+/.test(rawLine);
+              const lm = rawLine.match(/^\s*(\d+)\.\s+(.*)$/);
+              if (lm) {
+                listItems.push({ num: lm[1], text: lm[2], isNested });
+              }
+              i++;
+            }
+            elements.push(
+              <div key={`ol-${i}`} style={{ margin: '4px 0 6px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {listItems.map((li, liIdx) => (
+                  <div key={liIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, paddingLeft: li.isNested ? 32 : 16, lineHeight: 1.55 }}>
+                    <span style={{ color: '#93c5fd', fontWeight: 600, fontFamily: 'monospace', minWidth: 18, flexShrink: 0 }}>
+                      {li.num}.
+                    </span>
+                    <div style={{ flex: 1 }}>{renderInlineMarkdown(li.text)}</div>
+                  </div>
+                ))}
+              </div>
+            );
+            continue;
+          }
+
+          // Regular paragraph / text line with line break preservation
+          elements.push(
+            <div key={`p-${i}`} style={{ margin: '2px 0', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
+              {renderInlineMarkdown(line)}
+            </div>
+          );
+          i++;
+        }
+
+        return <React.Fragment key={`sec-${secIdx}`}>{elements}</React.Fragment>;
+      })}
+    </div>
+  );
+}
+
+// ============ WRITE FILE VIEWER ============
+// Hiển thị tool write dạng khung file đẹp: header nổi bật, nội dung code có expand/collapse, badge thành công.
+function WriteFileViewer({ input, output }: { input?: string; output?: string }) {
+  const rawOut = typeof output === 'string' ? stripAnsi(output) : '';
+  const rawInp = typeof input === 'string' ? stripAnsi(input) : '';
+
+  // Parse JSON input để lấy filePath + content
+  let filePath = '';
+  let fileContent = '';
+  try {
+    const j = JSON.parse(rawInp);
+    if (j && typeof j.filePath === 'string') filePath = j.filePath;
+    else if (j && typeof j.path === 'string') filePath = j.path;
+    if (typeof j.content === 'string') fileContent = j.content;
+  } catch {}
+
+  if (!filePath && rawInp && !rawInp.startsWith('{') && !rawInp.includes('\n')) {
+    filePath = rawInp.trim();
+  }
+
+  const lines = fileContent.split('\n');
+  const hasManyLines = lines.length > 8;
+  const [expanded, setExpanded] = useState(false);
+  const displayContent = expanded ? fileContent : lines.slice(0, 8).join('\n');
+  const suffix = hasManyLines && !expanded ? `\n... (+${lines.length - 8} lines)` : '';
+
+  return (
+    <div
+      className="af-toolblock"
+      style={{
+      display: 'block',
+      width: '100%',
+      maxWidth: '100%',
+      boxSizing: 'border-box',
+      borderRadius: 10,
+      border: '1px solid var(--af-border)',
+      background: 'var(--bg-inset)',
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      marginBottom: 4
+    }}>
+      {/* Header: 📝 write: filePath */}
+      <div style={{
+        padding: '5px 10px',
+        background: 'var(--bg-panel)',
+        borderBottom: '1px solid var(--af-border)',
+        fontSize: 12,
+        fontFamily: 'monospace',
+        color: '#fbbf24',
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }}>
+        📝 write: {filePath || 'file'}
+      </div>
+      {/* Khung code nền tối, scroll tối đa 300px */}
+      <div style={{
+        maxHeight: 300,
+        overflowY: 'auto',
+        overflowX: 'auto',
+        width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        background: '#0d1117'
+      }}>
+        <pre style={{
+          margin: 0,
+          padding: '8px 10px',
+          fontFamily: 'monospace',
+          fontSize: 12,
+          lineHeight: 1.55,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          color: '#c9d1d9',
+          maxWidth: '100%',
+          boxSizing: 'border-box'
+        }}>
+          {displayContent || '(empty)'}{suffix}
+        </pre>
+      </div>
+      {/* Footer: badge thành công + nút mở rộng/thu gọn */}
+      <div style={{
+        padding: '4px 10px 6px',
+        fontSize: 11,
+        color: '#86efac',
+        fontFamily: 'monospace',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8
+      }}>
+        <span>✓ Ghi file thành công</span>
+        {hasManyLines && (
+          <button
+            onClick={() => setExpanded(e => !e)}
+            style={{
+              background: 'rgba(148,163,184,0.1)',
+              border: '1px solid rgba(148,163,184,0.25)',
+              color: '#cbd5e1',
+              borderRadius: 4,
+              padding: '1px 8px',
+              fontSize: 10,
+              cursor: 'pointer',
+              fontFamily: 'monospace'
+            }}
+          >
+            {expanded ? 'Collapse' : `Expand (${lines.length} dòng)`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ============ READ FILE VIEWER ============
 // Hiển thị kết quả tool read dạng khung file đẹp: bỏ XML thô (<path>/<content>), có header đường dẫn.
 function ReadFileViewer({ input, output }: { input?: string; output?: string }) {
@@ -315,7 +962,10 @@ function ReadFileViewer({ input, output }: { input?: string; output?: string }) 
       <div style={{
         maxHeight: 300,
         overflowY: 'auto',
+        overflowX: 'auto',
         width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
         background: '#0d1117'
       }}>
         <pre style={{
@@ -326,7 +976,9 @@ function ReadFileViewer({ input, output }: { input?: string; output?: string }) 
           lineHeight: 1.55,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
-          color: '#c9d1d9'
+          color: '#c9d1d9',
+          maxWidth: '100%',
+          boxSizing: 'border-box'
         }}>
           {code || rawOut || '(empty)'}
         </pre>
@@ -385,7 +1037,10 @@ function BashCommandViewer({ input, output }: { input?: string; output?: string 
           <div style={{
             maxHeight: 280,
             overflowY: 'auto',
+            overflowX: 'auto',
             width: '100%',
+            maxWidth: '100%',
+            boxSizing: 'border-box',
             fontFamily: 'monospace',
             fontSize: 12,
             lineHeight: 1.55
@@ -425,11 +1080,13 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
       style={{
       display: 'block',
       width: '100%',
+      maxWidth: '100%',
       boxSizing: 'border-box',
       borderRadius: 10,
       border: '1px solid var(--af-border)',
       background: 'var(--bg-inset)',
-      overflow: 'hidden',
+      overflowX: 'auto',
+      overflowY: 'hidden',
       marginBottom: 4
     }}>
       {/* Header: 🔍 TOOL pattern: "..." in path */}
@@ -449,7 +1106,10 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
       <div style={{
         maxHeight: 280,
         overflowY: 'auto',
+        overflowX: 'auto',
         width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
         background: '#0d1117'
       }}>
         {rows.length === 0 ? (
@@ -649,6 +1309,9 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
     safeTool === 'edit' ||
     !!(parsedInput && ('oldString' in parsedInput || 'newString' in parsedInput));
 
+  // WriteFileViewer cho tool write
+  const isWriteView = safeTool === 'write';
+
   // ReadFileViewer cho tool read (hoặc output chứa khối <content>)
   const isReadView = safeTool === 'read' || /<content>/i.test(rawOutput);
 
@@ -657,6 +1320,7 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
 
   // SearchCommandViewer cho glob/grep/searcher — GitHub-style kết quả tìm kiếm
   const isSearchView = safeTool === 'glob' || safeTool === 'grep' || safeTool === 'searcher';
+
   const oldLines: string[] =
     isEditDiff && parsedInput && typeof parsedInput.oldString === 'string' && parsedInput.oldString !== ''
       ? parsedInput.oldString.split('\n')
@@ -675,12 +1339,14 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
       style={{
       display: 'block',
       width: '100%',
+      maxWidth: '100%',
       boxSizing: 'border-box',
       borderRadius: 10,
       border: '1px solid var(--af-border)',
       background: 'var(--bg-inset)',
-      overflow: 'hidden',
-      margin: '4px 0'
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      marginBottom: 4
     }}>
       {/* Header: badge tên tool + nút thu gọn/mở rộng */}
       <div
@@ -738,7 +1404,10 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
           style={{
           maxHeight: 280,
           overflowY: 'auto',
+          overflowX: 'hidden',
           width: '100%',
+          maxWidth: '100%',
+          boxSizing: 'border-box',
           padding: '8px 10px',
           fontFamily: 'monospace',
           fontSize: 12,
@@ -749,7 +1418,7 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
         }}>
           {isEditDiff && parsedInput && ((oldLines.length > 0 || newLines.length > 0) || typeof parsedInput.filePath === 'string') ? (
             /* GIT-STYLE DIFF VIEW (context-aware) — chốt cứng maxHeight 300 + scroll */
-            <div style={{ maxHeight: 300, overflowY: 'auto', width: '100%' }}>
+            <div style={{ maxHeight: 300, overflowY: 'auto', overflowX: 'auto', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
               {typeof parsedInput.filePath === 'string' && parsedInput.filePath !== '' && (
                 <div style={{ padding: '4px 8px 6px', color: '#94a3b8', fontFamily: 'monospace', fontSize: 12 }}>
                   📁 {parsedInput.filePath}
@@ -764,6 +1433,9 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
                   : <DiffLine key={`d${i}`} sign={row.type === 'del' ? '-' : '+'} text={row.text} />
               )}
             </div>
+          ) : isWriteView ? (
+            /* WRITE FILE VIEWER — header nổi bật + expand/collapse + badge thành công */
+            <WriteFileViewer input={safeInput} output={rawOutput} />
           ) : isReadView ? (
             /* READ FILE VIEWER — khung file đẹp thay XML thô */
             <ReadFileViewer input={safeInput} output={rawOutput} />
@@ -789,16 +1461,18 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
 
   return (
     <div
-      className="af-thinking"
+      className="af-toolblock"
       style={{
       display: 'block',
       width: '100%',
+      maxWidth: '100%',
       boxSizing: 'border-box',
       borderRadius: 10,
-      border: '1px solid rgba(148,163,184,0.18)',
+      border: '1px solid var(--af-border)',
       background: 'var(--bg-inset)',
-      overflow: 'hidden',
-      marginBottom: 6
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      marginBottom: 4
     }}>
       {/* Header: 💭 Thinking + toggle */}
       <div style={{
@@ -909,6 +1583,9 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   const isError = msg.msgType === 'error' || msg.from === 'error' || (typeof msg.content === 'string' && msg.content.startsWith('❌ Error'));
   const isOpenCode = msg.msgType === 'opencode';
   const isQueued = typeof msg.content === 'string' && msg.content.startsWith('[QUEUED]');
+  const isStopUser = msg.msgType === 'stop_user';
+  const isStopOrchestrator = msg.msgType === 'stop_orchestrator';
+  const isStopError = msg.msgType === 'stop_error';
 
   let sender = msg.from;
   let senderColor = '#38bdf8';
@@ -946,8 +1623,19 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     senderColor = '#34d399';
   }
 
+  // Parse and strip internal prompt wrappers ([TEAM]...[/TEAM], [TASK], === INCOMING MESSAGE ===)
+  let rawContent: string = msg.content || '';
+  if (rawContent.includes('=== INCOMING MESSAGE ===') && rawContent.includes('=== MESSAGE ===')) {
+    const msgIdx = rawContent.indexOf('=== MESSAGE ===');
+    let inner = rawContent.substring(msgIdx + '=== MESSAGE ==='.length);
+    const remIdx = inner.indexOf('=== SYSTEM REMINDER ===');
+    if (remIdx !== -1) inner = inner.substring(0, remIdx);
+    rawContent = inner.trim();
+  } else if (rawContent.includes('[TEAM]') && rawContent.includes('[/TEAM]')) {
+    rawContent = rawContent.replace(/\[TEAM\][\s\S]*?\[\/TEAM\]/g, '').replace(/\[TASK\][^\n]*\n?/g, '').trim();
+  }
+
   // Parse [TO: xxx] prefix
-  const rawContent: string = msg.content || '';
   const toMatch = rawContent.match(/^\s*\[TO:\s*([^\]]+)\]\s*/i);
   const toTag = toMatch ? toMatch[1].trim() : null;
   let body = toMatch ? rawContent.slice(toMatch[0].length) : rawContent;
@@ -969,11 +1657,11 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     }
   }
 
-  // Visual Bubble Themes — token hóa theo theme (modern minimalist: panel trung tính, viền mảnh)
-  let bubbleBg = 'var(--bg-panel)';
-  let bubbleBorder = '1px solid var(--af-border)';
+  // Visual Bubble Themes — Full Flat Conversation Style (Cursor / Claude / v0 style)
+  let bubbleBg = 'transparent';
+  let bubbleBorder = 'none';
   let textColor = 'var(--text-primary)';
-  let bubbleShadow = 'var(--shadow-panel)';
+  let bubbleShadow = 'none';
 
   if (isOpenCode) {
     bubbleBg = 'var(--bg-inset)';
@@ -981,46 +1669,30 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     textColor = 'var(--text-secondary)';
     bubbleShadow = 'none';
   } else if (isUser) {
-    bubbleBg = 'linear-gradient(135deg, var(--accent-strong) 0%, var(--accent) 100%)';
-    bubbleBorder = '1px solid transparent';
-    textColor = '#ffffff';
-    bubbleShadow = '0 3px 12px rgba(37, 99, 235, 0.25)';
-  } else if (isOrchestrator) {
-    bubbleBg = 'var(--bg-panel)';
-    bubbleBorder = '1px solid var(--af-border-strong)';
+    bubbleBg = 'rgba(59, 130, 246, 0.08)';
+    bubbleBorder = '1px solid rgba(59, 130, 246, 0.2)';
     textColor = 'var(--text-primary)';
     bubbleShadow = 'none';
-  } else if (roleBadge.includes('verif') || roleBadge.includes('test')) {
-    bubbleBg = 'var(--bg-panel)';
-    bubbleBorder = '1px solid var(--af-border)';
-    textColor = 'var(--text-primary)';
-    bubbleShadow = 'none';
-  } else if (roleBadge.includes('coder') || roleBadge.includes('debug')) {
-    bubbleBg = 'var(--bg-panel)';
-    bubbleBorder = '1px solid var(--af-border)';
-    textColor = 'var(--text-primary)';
-    bubbleShadow = 'none';
-  } else if (roleBadge.includes('research') || roleBadge.includes('search') || roleBadge.includes('plan')) {
-    bubbleBg = 'var(--bg-panel)';
-    bubbleBorder = '1px solid var(--af-border)';
-    textColor = 'var(--text-primary)';
-    bubbleShadow = 'none';
-  } else if (isError) {
-    bubbleBg = 'rgba(239, 68, 68, 0.10)';
-    bubbleBorder = '1px solid rgba(239, 68, 68, 0.35)';
-    textColor = '#fca5a5';
+  } else if (isError || isStopError) {
+    bubbleBg = 'rgba(239, 68, 68, 0.08)';
+    bubbleBorder = '1px solid rgba(239, 68, 68, 0.25)';
+    textColor = '#f87171';
     bubbleShadow = 'none';
   } else if (isQueued) {
-    bubbleBg = 'rgba(245, 158, 11, 0.10)';
-    bubbleBorder = '1px solid rgba(245, 158, 11, 0.35)';
-    textColor = '#fef3c7';
+    bubbleBg = 'rgba(245, 158, 11, 0.08)';
+    bubbleBorder = '1px solid rgba(245, 158, 11, 0.25)';
+    textColor = 'var(--text-primary)';
+  } else if (isStopUser || isStopOrchestrator) {
+    bubbleBg = 'rgba(234, 179, 8, 0.08)';
+    bubbleBorder = '1px solid rgba(234, 179, 8, 0.25)';
+    textColor = 'var(--text-primary)';
   }
 
   const formattedTime = formatTimestamp(msg.timestamp);
   const fullDateTime = formatFullDate(msg.timestamp);
 
-  // Collapsible structured reports
-  const isReport = body.includes('=== TASK REPORT ===') || body.includes('=== ERROR REPORT ===') || body.includes('=== AGENT MESSAGE ===');
+  // Collapsible structured reports — only for worker messages, NOT orchestrator/user
+  const isReport = !isOrchestrator && !isUser && (body.includes('=== TASK REPORT ===') || body.includes('=== ERROR REPORT ===') || body.includes('=== AGENT MESSAGE ==='));
 
   // Tin có toolCalls (hoặc log opencode) — các khối tool/thinking render ĐỘC LẬP ngoài bubble
   const hasToolBlocks = showToolBlocks && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0;
@@ -1129,21 +1801,23 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         </div>
       )}
 
-      {/* Khối 3: Bubble text — chỉ lời thoại/kết luận */}
+      {/* Khối 3: Bubble text — dạng flat stream chuyên nghiệp */}
       <div
         className={`af-bubble${isUser ? ' af-bubble-user' : ''}`}
         style={{
-        background: bubbleBg,
+        background: isUser ? bubbleBg : 'transparent',
         color: textColor,
-        padding: isOpenCode ? '10px 12px' : '12px 16px',
-        borderRadius: isUser ? '16px 4px 16px 16px' : '14px',
-        maxWidth: isOpenCode ? (isMobile ? '96%' : '95%') : (isMobile ? '94%' : '85%'),
+        padding: isUser ? '10px 14px' : '10px 0',
+        borderRadius: 12,
+        width: 'fit-content',
+        maxWidth: isMobile ? '94%' : '88%',
+        boxSizing: 'border-box',
         fontSize: isOpenCode ? 12 : 13,
         lineHeight: 1.6,
-        whiteSpace: 'pre-wrap',
+        whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
         fontFamily: isOpenCode ? 'monospace' : 'inherit',
-        border: bubbleBorder,
-        boxShadow: bubbleShadow,
+        border: isUser ? bubbleBorder : 'none',
+        boxShadow: isUser ? bubbleShadow : 'none',
         wordBreak: 'break-word',
         position: 'relative'
       }}>
@@ -1180,11 +1854,12 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           <div style={{ color: 'var(--text-muted)', fontSize: 12, fontStyle: 'italic' }}>
             Report content collapsed. Click "Show Full Report" above to expand.
           </div>
-        ) : (
-          /* Report Block: FULL HEIGHT — không giới hạn chiều cao, không scroll lồng */
-          <div style={{ fontFamily: isOpenCode ? 'monospace' : 'inherit', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        ) : isOpenCode ? (
+          <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {body}
           </div>
+        ) : (
+          <MarkdownRenderer content={body} isReport={isReport} />
         )}
       </div>
     </div>
@@ -1240,11 +1915,12 @@ export function ChatPanel({
 }: Props) {
   const [input, setInput] = useState('');
   const [collapsedReports, setCollapsedReports] = useState<Record<string, boolean>>({});
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const initialLoadRef = useRef(true);
-  const AUTO_SCROLL_THRESHOLD = 140;
+  const AUTO_SCROLL_THRESHOLD = 80;
 
   // ============ VIRTUALIZED TAIL WINDOW ============
   // Chỉ render N tin nhắn MỚI NHẤT khi vào hội thoại → load nhanh (<150ms) kể cả history dài.
@@ -1295,6 +1971,7 @@ export function ChatPanel({
     const { scrollTop, scrollHeight, clientHeight } = el;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     isNearBottomRef.current = distanceFromBottom <= AUTO_SCROLL_THRESHOLD;
+    setShowScrollBtn(distanceFromBottom > AUTO_SCROLL_THRESHOLD);
     // Tự động nạp tin nhắn cũ khi người dùng cuộn sát lên đỉnh
     if (scrollTop <= TOP_LOAD_TRIGGER_PX && totalLen > visibleCount) {
       loadOlder();
@@ -1324,10 +2001,19 @@ export function ChatPanel({
       el.scrollTop = el.scrollHeight;
       initialLoadRef.current = false;
       isNearBottomRef.current = true;
+      setShowScrollBtn(false);
     } else if (isNearBottomRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      setShowScrollBtn(false);
     }
   }, [messages, allMessages]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollBtn(distanceFromBottom > AUTO_SCROLL_THRESHOLD);
+  }, [messages, allMessages, visibleCount]);
 
   // Sau khi prepend tin nhắn cũ (load more), giữ nguyên vị trí cuộn của người dùng
   useLayoutEffect(() => {
@@ -1397,7 +2083,7 @@ export function ChatPanel({
           </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span className="af-chat-title" style={{ fontSize: 14, fontWeight: 600, color: '#f8fafc', letterSpacing: '-0.01em' }}>
+              <span className="af-chat-title" style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
                 {title || 'Orchestrator'}
               </span>
 
@@ -1572,7 +2258,7 @@ export function ChatPanel({
             }}>
               🤖
             </div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.02em' }}>AgentForge Workspace</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>AgentForge Workspace</div>
             <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.5, color: 'var(--text-muted)' }}>
               Spawn your autonomous worker agents, coordinate workflows, and command the swarm.
             </div>
@@ -1599,16 +2285,30 @@ export function ChatPanel({
                 </button>
               </div>
             )}
-            {visibleMessages.map((msg: any) => (
-              <MessageItem
-                key={msg.id}
-                msg={msg}
-                agents={agents}
-                isCollapsed={!!collapsedReports[msg.id]}
-                onToggleReport={toggleReport}
-                isMobile={isMobile}
-              />
-            ))}
+            {(() => {
+              // FIX: Skip opencode system wrapper message ("⚡ OpenCode") when the
+              // next message from the same agent is a report, to avoid double rendering
+              // the report (system wrapper + internal agent report card).
+              const deduplicatedMessages = visibleMessages.filter((msg: any, idx: number) => {
+                const isWrapper = msg.msgType === 'opencode' && msg.content;
+                if (!isWrapper) return true;
+                const next = visibleMessages[idx + 1];
+                if (!next) return true;
+                const sameAgent = !!msg.agentId && msg.agentId === next.agentId;
+                const nextIsReport = !!next.content && (next.content.includes('=== TASK REPORT ===') || next.content.includes('=== ERROR REPORT ===') || next.content.includes('=== AGENT MESSAGE ==='));
+                return !(sameAgent && nextIsReport);
+              });
+              return deduplicatedMessages.map((msg: any) => (
+                <MessageItem
+                  key={msg.id}
+                  msg={msg}
+                  agents={agents}
+                  isCollapsed={!!collapsedReports[msg.id]}
+                  onToggleReport={toggleReport}
+                  isMobile={isMobile}
+                />
+              ));
+            })()}
           </>
         )}
 
@@ -1632,6 +2332,40 @@ export function ChatPanel({
             <span style={{ fontWeight: 500 }}>Agent is thinking and processing...</span>
           </div>
         )}
+
+        {/* Floating scroll-to-bottom button */}
+        {showScrollBtn && (
+          <button
+            onClick={() => {
+              scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+              isNearBottomRef.current = true;
+              setShowScrollBtn(false);
+            }}
+            style={{
+              position: 'absolute',
+              bottom: '80px',
+              right: '24px',
+              zIndex: 10,
+              borderRadius: '50%',
+              width: 36,
+              height: 36,
+              background: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 14,
+              lineHeight: 1
+            }}
+            title="Cuộn xuống cuối"
+          >
+            ↓
+          </button>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
@@ -1712,7 +2446,7 @@ export function ChatPanel({
             title={loading ? 'Queue' : 'Send'}
             style={{
               background: input.trim() ? 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)' : 'var(--bg-input)',
-              color: input.trim() ? '#ffffff' : 'var(--text-muted)',
+              color: input.trim() ? 'var(--text-primary)' : 'var(--text-muted)',
               border: input.trim() ? 'none' : '1px solid var(--af-border-strong)',
               borderRadius: 'var(--radius-md)',
               width: 44,

@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 interface Props {
   onAdd: (config: any) => void;
   onClose: () => void;
+  agents?: any[];
+  defaultSpawnedBy?: string | null;
 }
 
 const ROLES = [
@@ -16,9 +18,10 @@ const ROLES = [
   { value: 'debugger', label: '🐛 Debugger — Trace bugs, find root causes' },
   { value: 'searcher', label: '🔎 Searcher — Find files, code patterns, references' },
   { value: 'idea', label: '💡 Idea — Generate creative ideas, features, solutions' },
+  { value: 'orchestrator', label: '👑 Orchestrator — Sub-Orchestrator coordinator' },
 ];
 
-export function SpawnDialog({ onAdd, onClose }: Props) {
+export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: Props) {
   const [name, setName] = useState('');
   const [type, setType] = useState('acp');
   const [projectDir, setProjectDir] = useState('.');
@@ -26,6 +29,16 @@ export function SpawnDialog({ onAdd, onClose }: Props) {
   const [model, setModel] = useState('');
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
+  const [spawnedBy, setSpawnedBy] = useState(defaultSpawnedBy || 'orchestrator');
+
+  const orchList = [
+    { id: 'orchestrator', name: 'Main Orchestrator' },
+    ...agents.filter(a => (a.type === 'orchestrator' || a.role === 'orchestrator') && a.id !== 'orchestrator')
+  ];
+
+  useEffect(() => {
+    if (defaultSpawnedBy) setSpawnedBy(defaultSpawnedBy);
+  }, [defaultSpawnedBy]);
 
   useEffect(() => {
     setLoadingModels(true);
@@ -60,7 +73,8 @@ export function SpawnDialog({ onAdd, onClose }: Props) {
       id: 'agent-' + Date.now(),
       name: name.trim(),
       role: role,
-      type: type,
+      type: role === 'orchestrator' ? 'orchestrator' : type,
+      spawnedBy: role === 'orchestrator' ? undefined : (spawnedBy || 'orchestrator'),
       projectDir: projectDir || undefined,
       model: model || undefined
     };
@@ -140,6 +154,36 @@ export function SpawnDialog({ onAdd, onClose }: Props) {
             onBlur={(e) => { e.currentTarget.style.borderColor = '#334155'; }}
           />
         </div>
+
+        {/* Parent Orchestrator / Team */}
+        {role !== 'orchestrator' && (
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+              Parent Orchestrator / Team
+            </label>
+            <select
+              value={spawnedBy}
+              onChange={(e) => setSpawnedBy(e.target.value)}
+              style={{
+                width: '100%',
+                background: '#1e293b',
+                color: '#f8fafc',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                padding: '10px 12px',
+                fontSize: 13,
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              {orchList.map(o => (
+                <option key={o.id} value={o.id}>
+                  👑 {o.name || 'Orchestrator'} ({o.id})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Role */}
         <div>

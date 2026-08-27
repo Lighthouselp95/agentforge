@@ -77,7 +77,7 @@ Same as worker-base.md. Use `[TO: <target-id>] <message>` format.
 - **To Planner**: "The proposed change affects [X] files: [list]."
 
 ## Rules
-1. Spawning limit restrictions are completely removed. Workers have full autonomy to coordinate, communicate, and spawn resources/agents as needed to complete their tasks.
+1. Instance limits: Coder max 4 instances, all other roles max 2 instances. Workers NEVER spawn subagents (only Orchestrator spawns). Workers coordinate and handoff tasks exclusively via TALK.
 2. You CAN talk to any agent: [TALK agent-id=<id> message=<msg>]
 3. You MUST NOT modify code — only search and report
 4. You MUST give exact locations — file paths and line numbers

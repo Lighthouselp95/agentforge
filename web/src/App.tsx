@@ -100,7 +100,14 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<ChatMsg[]>([]);
   const lastSendAtRef = useRef(0);
-  const [sidebarWidth, setSidebarWidth] = useState(310);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('agentforge_sidebar_width');
+      return saved ? Math.max(240, Math.min(600, parseInt(saved, 10))) : 320;
+    } catch {
+      return 320;
+    }
+  });
   const [enableWatchdog, setEnableWatchdog] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
   // Bản đồ agentKey -> id tin nhắn stream đang chạy (chat:chunk / chat:tool_call)
@@ -583,6 +590,9 @@ export function App() {
       m.msgType === 'transcript' ||
       m.msgType === 'heartbeat' ||
       m.msgType === 'ping' ||
+      m.msgType === 'opencode_input' ||
+      m.msgType === 'internal_prompt' ||
+      content.startsWith('▶ INPUT (gửi opencode)') ||
       content.startsWith('=== TURN TRANSCRIPT') ||
       content.startsWith('=== SYSTEM STATUS CHECK') ||
       content.startsWith('=== SYSTEM CHECK') ||
@@ -610,7 +620,7 @@ export function App() {
             if (m.from === selectedAgentId && m.to && m.to !== 'user' && m.to !== 'broadcast') return false;
             const isFromWorker = m.from !== 'user' && m.from !== selectedAgentId && m.from !== 'system' && m.from !== 'error';
             if (isFromWorker) {
-              return m.to === selectedAgentId && /=== TASK REPORT ===|Task complete\./.test(m.content || '');
+              return false; // Ẩn hoàn toàn báo cáo của worker trên màn hình Orchestrator
             }
             return (
               (m.from === 'user' && m.to === selectedAgentId) ||
@@ -634,15 +644,14 @@ export function App() {
         if (m.msgType === 'opencode') return false;
         const isFromWorker = m.from !== 'user' && m.from !== 'orchestrator' && m.from !== 'system' && m.from !== 'error';
         if (isFromWorker) {
-          // Worker: CHỈ hiện khi là báo cáo sạch (Task Report / Task complete) — ẩn mọi tự sự
-          return m.to === 'orchestrator' &&
-            /=== TASK REPORT ===|Task complete\./.test(m.content || '');
+          // ẨN 100% tin nhắn và báo cáo của worker trên màn hình chat Main
+          return false;
         }
         return (
           (m.from === 'user' && (m.to === 'orchestrator' || !m.to)) ||
           (m.from === 'orchestrator' && (m.to === 'user' || m.to === 'broadcast' || !m.to)) ||
-          (m.msgType === 'error') ||
-          (m.from === 'error')
+          (m.msgType === 'error' && (m.to === 'user' || m.from === 'orchestrator')) ||
+          (m.from === 'error' && (m.to === 'user' || m.to === 'orchestrator'))
         );
       });
 
@@ -808,6 +817,7 @@ export function App() {
         display: 'flex',
         flexDirection: 'column',
         background: 'var(--bg-panel)',
+        overflowX: 'hidden',
         transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
         transition: 'transform 0.25s ease',
         boxShadow: sidebarOpen ? '4px 0 24px rgba(0,0,0,0.5)' : 'none'
@@ -819,7 +829,8 @@ export function App() {
         borderRight: '1px solid var(--af-border)',
         display: 'flex',
         flexDirection: 'column',
-        background: 'var(--bg-panel)'
+        background: 'var(--bg-panel)',
+        overflowX: 'hidden'
       };
 
   return (
@@ -1091,6 +1102,7 @@ export function App() {
           const onMove = (ev: MouseEvent) => {
             const nw = Math.max(240, Math.min(600, startW + ev.clientX - startX));
             setSidebarWidth(nw);
+            try { localStorage.setItem('agentforge_sidebar_width', String(nw)); } catch {}
           };
           const onUp = () => {
             document.removeEventListener('mousemove', onMove);

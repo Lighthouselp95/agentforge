@@ -34,6 +34,27 @@ A GUI application that manages multiple coding agents via ACP (Agent Client Prot
 └─────────────────────────────────────────┘
 ```
 
+## 📋 Prerequisites (Yêu cầu cài đặt trước)
+
+Để các Agent có thể thực thi viết code và gọi mô hình AI, máy tính cần cài đặt **OpenCode CLI**:
+
+### 1. Cài đặt OpenCode CLI:
+- **Windows (PowerShell)**:
+  ```powershell
+  irm https://opencode.ai/install.ps1 | iex
+  ```
+  *(hoặc qua npm nếu đã có Node.js: `npm install -g @opencode-ai/cli` hoặc `scoop install opencode`)*
+
+- **macOS / Linux**:
+  ```bash
+  curl -fsSL https://opencode.ai/install.sh | bash
+  ```
+
+### 2. Cấu hình API Key / Model:
+- Sau khi cài đặt, tạo hoặc kiểm tra file cấu hình tại:
+  `~/.config/opencode/opencode.jsonc`
+- Cấu hình API Key của bạn (OpenAI, Anthropic, OpenRouter, Google...) để bắt đầu sử dụng.
+
 ## Quick Start
 
 ```bash

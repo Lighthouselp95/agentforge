@@ -100,8 +100,10 @@ You MUST use these exact tags in your response:
 1. SPAWN — Create a new agent:
    [SPAWN role=<role> name=<name> task=<specific task description>]
 
-2. TALK — Send message to an existing agent:
-   [TALK agent-id=<agent-id> message=<your message>]
+2. TALK — Send message to an existing agent (and optionally update its assigned task):
+   [TALK target=<name/id> task=<specific new task description (optional)> message=<your message>]
+   hoặc
+   [TALK target=<name/id> message=<your message>]
 
 3. STOP — Stop a stuck agent:
    [STOP AGENT target-id=<agent-id>]
@@ -479,6 +481,28 @@ function broadcast(type: string, data: any) {
   });
 }
 
+/** Forward a system-generated notification to the Orchestrator as a [FROM: System] message.
+ *  Creates a normalized ChatMsg, persists it, queues it for the Orchestrator's unread
+ *  injection loop, and broadcasts it to all clients. */
+function forwardToOrchestrator(type: string, message: string): ChatMsg {
+  const msg: ChatMsg = {
+    id: uuidv4(),
+    from: 'system',
+    to: 'orchestrator',
+    content: message,
+    timestamp: Date.now(),
+    agentName: 'System',
+    agentRole: 'system',
+    msgType: 'internal'
+  };
+  chatHistory.push(msg);
+  storage.saveMessage(msg);
+  addUnreadForOrchestrator(msg);
+  broadcast('chat:message', { msg });
+  console.log(`[Forward] [${type}] → Orchestrator: ${message.slice(0, 120)}`);
+  return msg;
+}
+
 /** Get and consume unread messages for orchestrator with deduplication */
 function consumeUnreadForOrchestrator(): ChatMsg[] {
   const msgs: ChatMsg[] = [];
@@ -537,12 +561,11 @@ function broadcastOACEvent(agentId: string, ev: any) {
       return typeof v === 'string' ? v : JSON.stringify(v);
     };
     if (ev?.kind === 'in') {
-      const p = (ev.prompt || '').toString();
-      textLines.push(`▶ INPUT (gửi opencode):\n${p}`);
+      // Bỏ qua prompt input thô — không broadcast lên khung chat UI
+      return;
     } else if (ev?.kind === 'batch' && Array.isArray(ev.events)) {
       for (const item of ev.events) {
         if (item?.kind === 'in') {
-          textLines.push(`▶ INPUT (gửi opencode):\n${item.prompt || ''}`);
           continue;
         }
         const e = item?.event;
@@ -552,12 +575,13 @@ function broadcastOACEvent(agentId: string, ev: any) {
         // đếm token, không phải nội dung hội thoại → không render lên chat UI.
         const tt = String(t).toLowerCase().replace(/-/g, '_');
         if (tt === 'step_start' || tt === 'step_finish') continue;
-        // Chuẩn hoá biến thể tên event tool
-        const isToolUse = t === 'tool_use' || t === 'tool-call' || t === 'tool_call';
+        // Chuẩn hoá biến thể tên event tool (OpenCode CLI lẫn OpenCode Serve)
+        const isToolUse = t === 'tool_use' || t === 'tool-call' || t === 'tool_call' || (e as any).part?.type === 'tool' || Boolean((e as any).part?.tool);
         const isToolResult = t === 'tool_result' || t === 'tool';
+        const isTool = isToolUse || isToolResult;
         if (t === 'text' && e.part?.text) {
           textLines.push(e.part.text);
-        } else if (isToolUse || isToolResult) {
+        } else if (isTool) {
           const p = e.part || {};
           const st: any = p.state || {};
           const input = asText(isToolUse ? (p.input ?? st.input) : (p.input ?? st.input));
@@ -565,7 +589,7 @@ function broadcastOACEvent(agentId: string, ev: any) {
           const output = outputRaw === undefined ? undefined : stripAnsi(outputRaw);
           // Đẩy vào mảng cấu trúc — UI render hộp toolcall riêng, KHÔNG đụng textLines
           toolCalls.push({
-            tool: String(p.tool || (isToolResult ? 'result' : 'unknown')),
+            tool: String(p.tool || (isToolResult ? 'result' : 'tool')),
             ...(input !== undefined ? { input } : {}),
             ...(output !== undefined ? { output } : {})
           });
@@ -719,7 +743,9 @@ function getClient(agent: Agent): ACPClient {
     c.setOnStatusChange((busy) => {
       const cur = agents.get(agent.id);
       if (cur) {
-        cur.status = busy ? 'working' : 'idle';
+        const newStatus = busy ? 'working' : 'idle';
+        if (cur.status === newStatus) return; // Guard chống broadcast thừa
+        cur.status = newStatus;
         cur.workingSince = busy ? (cur.workingSince || Date.now()) : undefined;
         storage.updateAgent(cur.id, { status: cur.status, workingSince: cur.workingSince || null });
         broadcast('agent:updated', { agent: cur });
@@ -774,6 +800,11 @@ End your reply with one or more routing lines, each on its own line:
 - NEVER spawn subagents. Only the Orchestrator spawns.
 ====================================`;
 
+// Helper: truncate task to first line, strip leading markdown headers, max 80 chars
+function truncateTask(task: string): string {
+  return (task || '').split('\n')[0].replace(/^#+\s*/, '').trim().slice(0, 80);
+}
+
 function buildTeam(agentId: string, full: boolean = true): string {
   const self = agents.get(agentId);
   const isOrchestrator = self?.type === 'orchestrator' || agentId === 'orchestrator' || String(agentId || '').toLowerCase() === 'orchestrator' || self?.role === 'orchestrator';
@@ -789,7 +820,28 @@ function buildTeam(agentId: string, full: boolean = true): string {
     lines.push(`Your ID: ${self.id}`);
     lines.push(`Your name: ${self.name}`);
     lines.push(`Your role: ${self.role}`);
-    if (self.task) lines.push(`Your task: ${self.task.normalize('NFC')}`);
+    if (self.task) {
+      const selfTask = self.task.normalize('NFC').replace(/\s+/g, ' ').trim();
+      lines.push(`Your task: ${selfTask.length > 80 ? selfTask.slice(0, 77) + '...' : selfTask}`);
+    }
+
+    // Pair Context: Tự động gắn thông tin Coder & Verifier đồng hành
+    const roleLower = (self.role || '').toLowerCase();
+    if (roleLower.includes('verif') || roleLower.includes('reviewer')) {
+      const coders = others.filter(a => (a.role || '').toLowerCase().includes('coder') || (a.role || '').toLowerCase().includes('debug'));
+      let partnerCoder = coders.find(c => self.task && (self.task.includes(c.id) || self.task.includes(c.name)));
+      if (!partnerCoder && coders.length > 0) partnerCoder = coders[0];
+      if (partnerCoder) {
+        lines.push(`Your Partner (Coder): ${partnerCoder.name} (Role: ${partnerCoder.role}, ID: ${partnerCoder.id})`);
+      }
+    } else if (roleLower.includes('coder') || roleLower.includes('debug')) {
+      const verifiers = others.filter(a => (a.role || '').toLowerCase().includes('verif'));
+      let partnerVerifier = verifiers.find(v => self.task && (self.task.includes(v.id) || self.task.includes(v.name)));
+      if (!partnerVerifier && verifiers.length > 0) partnerVerifier = verifiers[0];
+      if (partnerVerifier) {
+        lines.push(`Your Partner (Verifier): ${partnerVerifier.name} (Role: ${partnerVerifier.role}, ID: ${partnerVerifier.id})`);
+      }
+    }
   }
   if (others.length === 0) {
     lines.push(isOrchestrator ? 'No active agents.' : 'No other agents are currently active.');
@@ -844,6 +896,7 @@ function stopAgent(id: string, stoppedBy: 'user' | 'orchestrator' | 'error' = 'u
   };
   chatHistory.push(stopMsg);
   storage.saveMessage(stopMsg);
+  addUnreadForOrchestrator(stopMsg);
   broadcast('chat:message', { msg: stopMsg });
 
   console.log(`[Stop] ${a.name} (${a.id}) by ${stoppedBy}`);
@@ -1107,10 +1160,11 @@ function checkAndSynthesize(completedAgentId: string) {
           ...(result.contextLength ? { contextLength: result.contextLength } : {})
         });
       }
-      const cleanContent = stripCommandTags(result.content).trim().normalize('NFC');
+      // Display content giữ nguyên 100% — commands đã được extract/execute riêng bởi handleOrchestratorResponse
+      const displayContent = (result.content || '').trim().normalize('NFC');
 
-      if (cleanContent) {
-        const orchMsg: ChatMsg = { id: uuidv4(), from: 'orchestrator', to: 'user', content: cleanContent, timestamp: Date.now(), agentName: 'Orchestrator', agentRole: 'orchestrator' };
+      if (displayContent) {
+        const orchMsg: ChatMsg = { id: uuidv4(), from: 'orchestrator', to: 'user', content: displayContent, timestamp: Date.now(), agentName: 'Orchestrator', agentRole: 'orchestrator' };
         chatHistory.push(orchMsg); storage.saveMessage(orchMsg);
         trimChatHistory();
         broadcast('chat:message', { msg: orchMsg });
@@ -1216,6 +1270,7 @@ function startWorkerWatchdog() {
 
 const INVALID_TARGET_PLACEHOLDERS = new Set([
   'target-id', '<target-id>', 'agent-id', '<agent-id>', 'id', '<id>',
+  'coder-id', '<coder-id>', 'verifier-id', '<verifier-id>',
   'target', '<target>', 'worker', '<worker>', 'recipient', '<recipient>',
   'your-id', '<your-id>', 'name/id', '<name/id>', 'verifier-name/id', '<verifier-name/id>',
   'undefined', 'null', 'none', 'unknown',
@@ -1337,6 +1392,38 @@ function getCodeSpanRanges(text: string): Array<[number, number]> {
     }
     i++;
   }
+  // Also protect Task Report blocks: === TASK REPORT === ... === END REPORT ===
+  const reportStartRe = /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/gi;
+  const reportEndRe = /===\s*END[^=\n]*REPORT\s*===/gi;
+  let rm: RegExpExecArray | null;
+  while ((rm = reportStartRe.exec(text)) !== null) {
+    const startIdx = rm.index;
+    reportEndRe.lastIndex = startIdx + rm[0].length;
+    const em = reportEndRe.exec(text);
+    const endIdx = em ? em.index + em[0].length : text.length;
+    ranges.push([startIdx, endIdx] as [number, number]);
+  }
+  // Protect quoted attribute values of message=/msg=/content= inside TALK/SPAWN tags
+  // to prevent nested [SPAWN]/[TALK] examples from being executed as real commands.
+  let scan = 0;
+  while (scan < text.length) {
+    const talkIdx = text.indexOf('[TALK', scan);
+    const spawnIdx = text.indexOf('[SPAWN', scan);
+    const nextTag = Math.min(
+      talkIdx === -1 ? Infinity : talkIdx,
+      spawnIdx === -1 ? Infinity : spawnIdx
+    );
+    if (nextTag === Infinity) break;
+    const tagEnd = text.indexOf(']', nextTag);
+    if (tagEnd === -1) { scan = nextTag + 1; continue; }
+    const tagBody = text.substring(nextTag, tagEnd + 1);
+    const attrMatch = tagBody.match(/\b(?:message|msg|content)\s*=\s*(?:"|'|“)([\s\S]*?)(?:"|'|”)/);
+    if (attrMatch && attrMatch[1] !== undefined) {
+      const valueStart = nextTag + attrMatch[0].indexOf(attrMatch[1]);
+      ranges.push([valueStart, valueStart + attrMatch[1].length] as [number, number]);
+    }
+    scan = tagEnd + 1;
+  }
   return ranges;
 }
 function isInCodeSpan(idx: number, ranges: Array<[number, number]>): boolean {
@@ -1444,26 +1531,42 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
   const agentId = cleanTargetIdentifier(rawId);
   if (!agentId) return null;
 
-  // 2. Trích xuất task nếu có (ưu tiên nếu task= đứng trước message=)
+  // 2. Trích xuất task nếu có
   let task: string | undefined = undefined;
-  const taskParamMatch = tagContent.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s\]\n]+))/i);
-  if (taskParamMatch) {
-    const rawTask = taskParamMatch[1] || taskParamMatch[2] || taskParamMatch[3] || taskParamMatch[4] || '';
+  const taskMarkerMatch = tagContent.match(/\btask\s*=\s*/i);
+  if (taskMarkerMatch && taskMarkerMatch.index !== undefined) {
+    const taskStart = taskMarkerMatch.index + taskMarkerMatch[0].length;
+    // task= value kết thúc trước message=/msg=/content= hoặc cuối tagContent
+    const afterTask = tagContent.substring(taskStart);
+    const nextAttrMatch = afterTask.match(/\b(?:message|msg|content)\s*=/i);
+    const rawTask = nextAttrMatch && nextAttrMatch.index !== undefined
+      ? afterTask.substring(0, nextAttrMatch.index).trim()
+      : afterTask.trim();
     if (rawTask) task = stripQuotes(rawTask);
   }
 
-  // 3. Trích xuất message: lấy toàn bộ nội dung từ sau 'message=' (hoặc 'msg=' hoặc 'content=')
+  // 3. Trích xuất message: lấy nội dung từ sau 'message=' đến trước 'task=' (nếu task= đứng sau)
   const msgMarkerMatch = tagContent.match(/\b(message|msg|content)\s*=\s*/i);
   let message: string | undefined = undefined;
   if (msgMarkerMatch && msgMarkerMatch.index !== undefined) {
     const msgStart = msgMarkerMatch.index + msgMarkerMatch[0].length;
-    const rawMsg = tagContent.substring(msgStart);
+    const afterMsg = tagContent.substring(msgStart);
+    // Dừng trước task= nếu task= đứng SAU message=
+    const taskAfterMatch = afterMsg.match(/\btask\s*=/i);
+    const rawMsg = taskAfterMatch && taskAfterMatch.index !== undefined
+      ? afterMsg.substring(0, taskAfterMatch.index).trim()
+      : afterMsg.trim();
     message = stripQuotes(rawMsg);
   }
 
-  const finalMessage = (message && message.trim()) || (task && task.trim());
+  // task và message là 2 field ĐỘC LẬP:
+  // - task → update targetAgent.task (qua truncateTask)
+  // - message → inject vào agent prompt
+  // Khi chỉ có task= mà không có message= → tạo message mặc định ngắn gọn
+  const trimmedTask = task && task.trim() ? task.trim() : undefined;
+  const trimmedMessage = message && message.trim() ? message.trim() : undefined;
+  const finalMessage = trimmedMessage || (trimmedTask ? `New task: ${trimmedTask}` : '');
   if (agentId && finalMessage) {
-    const trimmedTask = task && task.trim() ? task.trim() : undefined;
     return { agentId, message: finalMessage, ...(trimmedTask ? { task: trimmedTask } : {}) };
   }
   return null;
@@ -1495,9 +1598,33 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
   // Handles quotes, whitespace, and angle brackets like [TO: <orchestrator>] or [TO: "agent-1"]
   const tagRegex = /(?:\[FROM:\s*[^\]]+\]\s*)?\[TO:\s*([^\]]+)\]/gi;
 
+  function isInsideCodeBlockOrSpan(text: string, index: number): boolean {
+    let inFenced = false;
+    let inInline = false;
+    for (let i = 0; i < index && i < text.length; i++) {
+      if (text.startsWith('```', i)) {
+        inFenced = !inFenced;
+        i += 2;
+      } else if (text[i] === '`' && !inFenced) {
+        inInline = !inInline;
+      }
+    }
+    return inFenced || inInline;
+  }
+
   const tagMatches: Array<{ index: number; length: number; rawTo: string }> = [];
   let m: RegExpExecArray | null;
   while ((m = tagRegex.exec(cleanContent)) !== null) {
+    if (isInsideCodeBlockOrSpan(cleanContent, m.index)) {
+      continue;
+    }
+    const cleanCandidate = cleanTargetIdentifier(m[1]);
+    const rawTarget = (m[1] || '').trim();
+    if (INVALID_TARGET_PLACEHOLDERS.has(rawTarget.toLowerCase()) || /^<.*>$/.test(rawTarget) || !cleanCandidate) {
+      if (rawTarget.toLowerCase() !== 'orchestrator' && rawTarget.toLowerCase() !== 'user' && rawTarget.toLowerCase() !== 'main') {
+        continue; // Skip placeholder tag like [TO: <coder-id>]
+      }
+    }
     tagMatches.push({
       index: m.index,
       length: m[0].length,
@@ -1525,6 +1652,18 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
     // Clean trailing [FROM: ...] if left at the end before next tag or end of string
     msgText = msgText.replace(/\[FROM:\s*[^\]]+\]\s*$/i, '').trim();
 
+    // Extract [TASK] block if present: only the FIRST LINE of task content, max 80 chars
+    // [TASK] can be on its own line or inline: [TASK] Some task\nMore content
+    let extractedTask: string | undefined = undefined;
+    const taskBlockMatch = msgText.match(/^\s*\[TASK\]\s*\n?([^\[]*)/i);
+    if (taskBlockMatch) {
+      const taskContent = taskBlockMatch[1] || '';
+      const firstLine = taskContent.split('\n')[0].trim();
+      extractedTask = firstLine ? firstLine.slice(0, 80) : undefined;
+      // Remove the [TASK] block from message body so it doesn't appear as content
+      msgText = msgText.replace(/^\s*\[TASK\]\s*\n?[^\[]*/i, '').trim();
+    }
+
     // Clean destination
     let cleanTo = cleanTargetIdentifier(cur.rawTo);
     let resolvedTo = 'orchestrator';
@@ -1538,7 +1677,7 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
     }
 
     if (msgText) {
-      matches.push({ to: resolvedTo, message: msgText });
+      matches.push({ to: resolvedTo, message: msgText, ...(extractedTask ? { task: extractedTask } : {}) });
     }
   }
 
@@ -1701,6 +1840,19 @@ function isEmptyAgentOutput(text: string | undefined | null): boolean {
   return t.length === 0 || t === '(No response)';
 }
 
+function updateOrchStateSafe(orchId: string, status: 'idle' | 'working' | 'error', taskDesc?: string) {
+  const orch = agents.get(orchId);
+  if (!orch) return;
+  const newDesc = taskDesc !== undefined ? taskDesc : orch.task;
+  if (orch.status === status && orch.task === newDesc) return; // Guard không đổi thì không spam
+  orch.status = status;
+  if (status === 'working') orch.workingSince = Date.now();
+  if (status === 'idle') orch.workingSince = undefined;
+  if (taskDesc !== undefined) orch.task = taskDesc;
+  storage.updateAgent(orch.id, { status: orch.status, workingSince: orch.workingSince, task: orch.task } as any);
+  broadcast('agent:updated', { agent: orch });
+}
+
 async function processOrchestratorTriggerQueue() {
   if (pendingOrchTriggers.length === 0) {
     return;
@@ -1737,10 +1889,7 @@ async function processOrchestratorTriggerQueue() {
       orchAgent = { id: orchId, name: (orchId === 'orchestrator' ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'idle', createdAt: Date.now() };
       agents.set(orchId, orchAgent);
     }
-    orchAgent.status = 'working';
-    orchAgent.workingSince = Date.now();
-    storage.updateAgent(orchId, { status: 'working', workingSince: orchAgent.workingSince });
-    broadcast('agent:updated', { agent: orchAgent } as any);
+    updateOrchStateSafe(orchId, 'working', 'Đang tổng hợp báo cáo & điều phối');
     
     const needReinject = client.getNeedPromptReinject() || !client.getSessionId();
     if (needReinject) client.setNeedPromptReinject(false);
@@ -1749,16 +1898,8 @@ async function processOrchestratorTriggerQueue() {
       `=== INCOMING MESSAGE ===\nFROM: ${fromAgent.name} (ID: ${fromAgent.id}, Role: ${fromAgent.role})\nTO: ${orchAgent.name || 'Orchestrator'} (${orchId})\n=== MESSAGE ===\n${message}`
     ).join('\n\n');
     
-    let prompt = '';
-    const includeTeam = shouldIncludeTeamContext(orchId, !client.getSessionId() || needReinject);
-    if (includeTeam) {
-      const team = buildTeam(orchId);
-      prompt = (client.getSessionId() && !needReinject)
-        ? `[TEAM UPDATE]\n${team}\n\n${combinedHeaders}`
-        : `[TEAM]\n${team}\n[/TEAM]\n\n${combinedHeaders}`;
-    } else {
-      prompt = combinedHeaders;
-    }
+    const team = buildTeam(orchId);
+    let prompt = `[TEAM]\n${team}\n[/TEAM]\n\n${combinedHeaders}`;
     if (!client.getSessionId() || needReinject) {
       prompt += ORCH_REMINDER;
     }
@@ -1791,7 +1932,8 @@ async function processOrchestratorTriggerQueue() {
           });
         }
       }
-      const cleanUserContent = stripCommandTags(result.content).trim().normalize('NFC');
+      // Display content giữ nguyên 100% — commands đã được extract/execute riêng bởi handleOrchestratorResponse
+      const cleanUserContent = (result.content || '').trim().normalize('NFC');
 
       if (cleanUserContent) {
         const orchMsg: ChatMsg = {
@@ -1824,10 +1966,7 @@ async function processOrchestratorTriggerQueue() {
         }
       }
     } finally {
-      orchAgent.status = 'idle';
-      orchAgent.workingSince = undefined;
-      storage.updateAgent(orchId, { status: 'idle', workingSince: null });
-      broadcast('agent:updated', { agent: orchAgent } as any);
+      updateOrchStateSafe(orchId, 'idle', 'Sẵn sàng');
       if (pendingOrchTriggers.length > 0) {
         if (orchTriggerDebounceTimer) clearTimeout(orchTriggerDebounceTimer);
         orchTriggerDebounceTimer = setTimeout(processOrchestratorTriggerQueue, 1500);
@@ -1916,6 +2055,7 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
 
     if (resolvedTo === 'orchestrator') {
       hasOrchestratorMessage = true;
+      updateOrchStateSafe(resolvedTo, 'working', `Đang tiếp nhận & tổng kết báo cáo từ ${fromAgent.name}`);
       // Chuyển thẳng tin nhắn (đã lọc nhiễu tool) về Orchestrator không bị chặn
       await triggerOrchestrator(fromAgent, outContent);
     } else {
@@ -1923,6 +2063,7 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
       if (targetAgent) {
         if (targetAgent.type === 'orchestrator') {
           hasOrchestratorMessage = true;
+          updateOrchStateSafe(resolvedTo, 'working', `Đang tiếp nhận & tổng kết báo cáo từ ${fromAgent.name}`);
           await triggerOrchestrator(fromAgent, outContent);
         } else {
           targetAgent.status = 'working';
@@ -1935,22 +2076,8 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
         if (msg.to !== 'user' && msg.to !== 'orchestrator' && msg.to !== 'broadcast') {
           const cleanTo = cleanTargetIdentifier(msg.to);
           const isPlaceholder = !cleanTo || INVALID_TARGET_PLACEHOLDERS.has(cleanTo.toLowerCase()) || cleanTo === 'worker' || cleanTo === 'target-id' || cleanTo === 'agent-id';
-          if (!isPlaceholder) {
-            const errorContent = `[ERROR] TALK: Agent not found: ${msg.to}`;
-            const notFoundErrMsg: ChatMsg = {
-              id: uuidv4(),
-              from: 'system',
-              to: 'orchestrator',
-              content: errorContent,
-              timestamp: Date.now(),
-              agentName: 'System',
-              agentRole: 'system',
-              msgType: 'internal'
-            };
-            chatHistory.push(notFoundErrMsg);
-            storage.saveMessage(notFoundErrMsg);
-            addUnreadForOrchestrator(notFoundErrMsg);
-            broadcast('chat:message', { msg: notFoundErrMsg });
+           if (!isPlaceholder) {
+             forwardToOrchestrator('TALK_AGENT_NOT_FOUND', `[ERROR] TALK: Agent not found: ${msg.to}`);
           } else {
             console.log(`[TALK] Ignored invalid placeholder target: "${msg.to}" from ${fromAgent.name}`);
           }
@@ -1993,17 +2120,22 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
     const needReinject = tc.getNeedPromptReinject() || !targetAgent.sessionId;
     if (needReinject) tc.setNeedPromptReinject(false);
 
-    // Cập nhật task cho targetAgent nếu có task tường minh hoặc tin nhắn từ Orchestrator
+    // Cập nhật task cho targetAgent:
+    // - Nếu msg.task CÓ giá trị → dùng đúng msg.task (ngắn gọn).
+    // - Nếu msg.task KHÔNG có → GIỮ NGUYÊN targetAgent.task ban đầu; chỉ tự sinh
+    //   summary từ DÒNG ĐẦU TIÊN tối đa 60 ký tự khi agent chưa có task.
+    // TUYỆT ĐỐI KHÔNG gán nguyên cả đoạn msg.message dài vào targetAgent.task.
     const explicitTask = msg.task && msg.task.trim() ? msg.task.trim() : '';
     if (explicitTask) {
-      targetAgent.task = explicitTask;
-      storage.updateAgent(targetAgent.id, { task: explicitTask } as any);
+      targetAgent.task = truncateTask(explicitTask);
+      storage.updateAgent(targetAgent.id, { task: truncateTask(explicitTask) } as any);
       broadcast('agent:updated', { agent: targetAgent });
-    } else if (fromAgent.role === 'orchestrator' || fromAgent.id === 'orchestrator' || fromAgent.type === 'orchestrator') {
-      const trimmedTask = msg.message.trim();
-      if (trimmedTask && trimmedTask.length < 300) {
-        targetAgent.task = trimmedTask;
-        storage.updateAgent(targetAgent.id, { task: trimmedTask } as any);
+    } else if ((fromAgent.role === 'orchestrator' || fromAgent.id === 'orchestrator' || fromAgent.type === 'orchestrator')
+        && (!targetAgent.task || !targetAgent.task.trim())) {
+      const summary = (msg.message || '').split('\n')[0].trim().slice(0, 60);
+      if (summary) {
+        targetAgent.task = summary;
+        storage.updateAgent(targetAgent.id, { task: summary } as any);
         broadcast('agent:updated', { agent: targetAgent });
       }
     }
@@ -2011,7 +2143,8 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
     const talkHeader = `=== INCOMING MESSAGE ===\nFROM: ${fromAgent.name} (ID: ${fromAgent.id}, Role: ${fromAgent.role})\nTO: ${targetAgent.name} (ID: ${targetAgent.id}, Role: ${targetAgent.role})\n=== MESSAGE ===`;
 
     const talkTeam = buildTeam(targetAgent.id);
-    const talkPrompt = `[TASK] ${targetAgent.task || 'General task'}\n[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${msg.message}\n\n${WORKER_REMINDER}`;
+    // [TASK] đã được hiển thị trong Your task: ở [TEAM] block, không cần lặp lại ở đây
+    const talkPrompt = `[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${msg.message}\n\n${WORKER_REMINDER}`;
     // WORKING NGAY TRƯỚC ENQUEUE: badge worker trên UI nhảy sang Working tức thì,
     // không phụ thuộc caller có set hay không (cover cả đường replay outbox).
     targetAgent.status = 'working';
@@ -2211,20 +2344,7 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
         console.warn(`[Role Limit] ${errorContent}`);
         commandResults.push(errorContent);
 
-        const limitErrMsg: ChatMsg = {
-          id: uuidv4(),
-          from: 'system',
-          to: 'orchestrator',
-          content: errorContent,
-          timestamp: Date.now(),
-          agentName: 'System',
-          agentRole: 'system',
-          msgType: 'internal'
-        };
-        chatHistory.push(limitErrMsg);
-        storage.saveMessage(limitErrMsg);
-        addUnreadForOrchestrator(limitErrMsg);
-        broadcast('chat:message', { msg: limitErrMsg });
+        const limitErrMsg = forwardToOrchestrator('SPAWN_ROLE_LIMIT', errorContent);
 
         const limitErrMsgUser: ChatMsg = {
           id: uuidv4(),
@@ -2328,29 +2448,16 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
     const { agentId, message, task } = talk;
     const ta = agents.get(agentId) || findAgentByName(agentId) || findAgentByIdNameOrRole(agentId);
     if (!ta) {
-      commandResults.push(`[ERROR] TALK: agent ${agentId} not found`);
-      const errorContent = `[ERROR] TALK: Agent not found: ${agentId}`;
-      const notFoundErrMsg: ChatMsg = {
-        id: uuidv4(),
-        from: 'system',
-        to: 'orchestrator',
-        content: errorContent,
-        timestamp: Date.now(),
-        agentName: 'System',
-        agentRole: 'system',
-        msgType: 'internal'
-      };
-      chatHistory.push(notFoundErrMsg);
-      storage.saveMessage(notFoundErrMsg);
-      addUnreadForOrchestrator(notFoundErrMsg);
-      broadcast('chat:message', { msg: notFoundErrMsg });
+      // Agent not found — likely a TALK example/placeholder in report text.
+      // Skip silently to avoid error spam. Only log to console.
+      console.warn(`[TALK] Skipped: agent "${agentId}" not found (likely example in report text)`);
       continue;
     }
     ta.status = 'working';
     ta.workingSince = Date.now();
     // Update task if provided in TALK command
     if (task && task.trim()) {
-      ta.task = task.trim().normalize('NFC');
+      ta.task = truncateTask(task.trim());
     }
     storage.updateAgent(ta.id, { status: 'working', workingSince: ta.workingSince, task: ta.task } as any);
     broadcast('agent:updated', { agent: ta });
@@ -2376,14 +2483,15 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
         if (needReinject) tc.setNeedPromptReinject(false);
         const talkHeader = `=== INCOMING MESSAGE ===\nFROM: Orchestrator (orchestrator)\nTO: ${ta.name} (ID: ${ta.id}, Role: ${ta.role})\n=== MESSAGE ===`;
         
-        // Cập nhật task cho ta nếu có nội dung mới
+        // Cập nhật task cho ta nếu có nội dung mới (luôn truncate)
         const trimmedMsg = message.trim();
         if (trimmedMsg) {
-          ta.task = trimmedMsg;
-          storage.updateAgent(ta.id, { task: trimmedMsg } as any);
+          ta.task = truncateTask(trimmedMsg);
+          storage.updateAgent(ta.id, { task: truncateTask(trimmedMsg) } as any);
         }
         const talkTeam = buildTeam(ta.id);
-        const talkPrompt = `[TASK] ${ta.task || 'General task'}\n[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${message}\n\n${WORKER_REMINDER}`;
+        // [TASK] đã được hiển thị trong Your task: ở [TEAM] block, không cần lặp lại
+        const talkPrompt = `[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${message}\n\n${WORKER_REMINDER}`;
         const tr = await tc.enqueue(talkPrompt);
         const newSid = tc.getSessionId();
         const isNewSession = Boolean(newSid && newSid !== ta.sessionId);
@@ -2460,7 +2568,9 @@ function getOrchClient(orchId: string = 'orchestrator'): ACPClient {
         orch = { id: orchId, name: (isMain ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'idle', createdAt: Date.now() };
         agents.set(orchId, orch);
       }
-      orch.status = busy ? 'working' : 'idle';
+      const newStatus = busy ? 'working' : 'idle';
+      if (orch.status === newStatus) return; // Guard chống broadcast thừa
+      orch.status = newStatus;
       orch.workingSince = busy ? (orch.workingSince || Date.now()) : undefined;
       storage.updateAgent(orchId, { status: orch.status, workingSince: orch.workingSince || null });
       broadcast('agent:updated', { agent: orch });
@@ -2527,20 +2637,7 @@ app.post('/api/agents', async (req, res) => {
       console.warn(`[API /api/agents] ${errorMsg}`);
       
       // Gửi tin nhắn lỗi về Main Orchestrator
-      const limitErrMsg: ChatMsg = {
-        id: uuidv4(),
-        from: 'system',
-        to: 'orchestrator',
-        content: errorMsg,
-        timestamp: Date.now(),
-        agentName: 'System',
-        agentRole: 'system',
-        msgType: 'internal'
-      };
-      chatHistory.push(limitErrMsg);
-      storage.saveMessage(limitErrMsg);
-      addUnreadForOrchestrator(limitErrMsg);
-      broadcast('chat:message', { msg: limitErrMsg });
+      const limitErrMsg = forwardToOrchestrator('CREATE_ROLE_LIMIT', errorMsg);
 
       // Gửi tin nhắn lỗi về User
       const limitErrMsgUser: ChatMsg = {
@@ -2699,7 +2796,7 @@ app.patch('/api/agents/:id', (req, res) => {
     storage.updateAgent(agentId, { name: agent.name } as any);
   }
   if (task !== undefined) {
-    agent.task = task.trim().normalize('NFC');
+    agent.task = truncateTask(task.trim());
     storage.updateAgent(agentId, { task: agent.task } as any);
     // KHÔNG notifyTeamChanged() ở đây — task content không phải member change
   }
@@ -2799,20 +2896,14 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         const team = buildTeam(targetAgent.id);
         prompt = (targetAgent.sessionId && !shouldReinject)
           ? `[TEAM UPDATE]\n${team}\n\n[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`
-          : `[TASK] ${targetAgent.task || 'General task'}\n[TEAM]\n${team}\n[/TEAM]\n\n[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`;
+          : `[TEAM]\n${team}\n[/TEAM]\n\n[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`;
       } else {
-        prompt = `[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`;
+        prompt = `Your ID: ${targetAgent.id}\nYour name: ${targetAgent.name}\nYour role: ${targetAgent.role}\n\n[FROM: user] [TO: ${targetAgent.id}] ${effectiveMsg}`;
       }
     }
   } else {
-    const orchAgent = agents.get('orchestrator');
-    if (orchAgent) {
-      orchAgent.status = 'working';
-      storage.updateAgent('orchestrator', { status: 'working' });
-      broadcast('agent:updated', { agent: orchAgent });
-    } else {
-      broadcast('agent:updated', { agent: { id: 'orchestrator', status: 'working' } } as any);
-    }
+    const orchId = resolvedTargetId || 'orchestrator';
+    updateOrchStateSafe(orchId, 'working', 'Đang phân tích yêu cầu & phân rã bài toán');
 
     // Inject unread messages từ workers vào prompt (bỏ qua khi retry để không consume lại)
     const unread = isRetry ? [] : consumeUnreadForOrchestrator();
@@ -2823,13 +2914,11 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         '\n=== END MESSAGES ===\n';
     }
 
+    const team = buildTeam(orchId);
     if (isSlashCommand) {
       prompt = effectiveMsg;
-    } else if (client.getSessionId() && !shouldReinject) {
-      prompt = `${unreadBlock ? unreadBlock + '\n\n' : ''}[FROM: user] [TO: orchestrator] ${effectiveMsg}`;
     } else {
-      const team = buildTeam('orchestrator');
-      prompt = `[TEAM]\n${team}${unreadBlock}\n[/TEAM]\n\n[FROM: user] [TO: orchestrator] ${effectiveMsg}`;
+      prompt = `[TEAM]\n${team}${unreadBlock}\n[/TEAM]\n\n[FROM: user] [TO: ${orchId}] ${effectiveMsg}`;
     }
   }
 
@@ -3004,7 +3093,8 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     } else {
       const commandResultsParse = await handleOrchestratorResponse(response, result.thinking || '');
       commandResults.push(...commandResultsParse);
-      const cleanResponse = stripCommandTags(response).trim();
+      // Display content giữ nguyên 100% — commands đã được extract/execute riêng
+      const cleanResponse = (response || '').trim();
       const aMsg: ChatMsg = {
         id: uuidv4(), from: 'orchestrator', to: 'user', content: cleanResponse || response,
         timestamp: Date.now(), agentName, agentRole,
@@ -3014,14 +3104,8 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
       chatHistory.push(aMsg); storage.saveMessage(aMsg);
       broadcast('chat:message', { msg: aMsg });
     }
-    const orchAgent = agents.get('orchestrator');
-    if (orchAgent) {
-      orchAgent.status = 'idle';
-      storage.updateAgent('orchestrator', { status: 'idle' });
-      broadcast('agent:updated', { agent: orchAgent });
-    } else {
-      broadcast('agent:updated', { agent: { id: 'orchestrator', status: 'idle' } } as any);
-    }
+    const orchId = resolvedTargetId || 'orchestrator';
+    updateOrchStateSafe(orchId, 'idle', 'Sẵn sàng');
   }
   return { response, sid, commands: commandResults };
 }
