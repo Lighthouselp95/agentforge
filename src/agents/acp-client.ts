@@ -348,9 +348,13 @@ export class ACPClient {
   private async chatWithRetry(prompt: string, attempt: number): Promise<AgentMessage> {
     const projectDir = this.config.projectDir || process.cwd();
 
-    // Fetch sessions ONCE — reused for count + fallback session detection
-    const beforeSessions = await this.fetchSessions();
-    const beforeCount = beforeSessions.length;
+    // TỐI ƯU HÓA: Chỉ fetch sessions nếu agent CHƯA CÓ sessionId (để tìm fallback session).
+    // Nếu agent đã có session rồi, bỏ qua 100% việc gọi subprocess 'opencode session list'.
+    let beforeCount = 0;
+    if (!this.sessionId) {
+      const beforeSessions = await this.fetchSessions();
+      beforeCount = beforeSessions.length;
+    }
 
     // SESSION KHÓA VĨNH VIỄN: không reset/xóa session tự động vì lý do format.
     // Session cũ được tái sử dụng liên tục đến khi server chết (yêu cầu kiến trúc).

@@ -7,10 +7,13 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { exec, execSync, spawn } from 'child_process';
+import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { ACPClient } from './agents/acp-client.js';
 import type { TokenUsage } from './agents/types.js';
 import { storage, MAX_PERSISTED_MESSAGES } from './storage.js';
+
+const execAsync = promisify(exec);
 
 const __dirname = dirname(fileURLToPath(new URL('.', import.meta.url)));
 const APP_VERSION = '0.2.0';
@@ -802,7 +805,7 @@ function buildTeam(agentId: string, full: boolean = true): string {
 const buildTeamBlock = buildTeam;
 
 // ============ STOP/RESUME/DELETE ============
-function stopAgent(id: string): boolean {
+function stopAgent(id: string, stoppedBy: 'user' | 'orchestrator' | 'error' = 'user', errorDetail?: string): boolean {
   const a = agents.get(id);
   if (!a || a.status === 'stopped') return false;
   // Abort process thật sự nếu agent đang chạy (kill opencode tree) — tránh mồ côi
@@ -810,12 +813,33 @@ function stopAgent(id: string): boolean {
   if (client) {
     try { client.abort(); } catch {}
   }
-  a.status = 'stopped'; a.workingSince = undefined;
+  a.status = (stoppedBy === 'error') ? 'error' : 'stopped';
+  a.workingSince = undefined;
   clients.delete(a.id);
-  storage.updateAgent(a.id, { status: 'stopped', workingSince: null });
+  storage.updateAgent(a.id, { status: a.status, workingSince: null });
   broadcast('agent:updated', { agent: a });
-  // KHÔNG notifyTeamChanged() ở đây — chỉ member change (spawn/delete) mới cần update team context
-  console.log(`[Stop] ${a.name} (${a.id})`);
+
+  // Tạo thông báo chuẩn hóa theo loại stop
+  let stopText = `🛑 [STOPPED] Agent ${a.name} was stopped by ${stoppedBy}.`;
+  let msgType: ChatMsg['msgType'] = (stoppedBy === 'user') ? 'stop_user' : (stoppedBy === 'orchestrator') ? 'stop_orchestrator' : 'stop_error';
+  if (stoppedBy === 'error') {
+    stopText = `❌ [CRASHED] Agent ${a.name} stopped due to error: ${errorDetail || 'Unknown error'}`;
+  }
+  const stopMsg: ChatMsg = {
+    id: uuidv4(),
+    from: a.id,
+    to: 'orchestrator',
+    content: stopText,
+    timestamp: Date.now(),
+    agentName: a.name,
+    agentRole: a.role,
+    msgType: msgType
+  };
+  chatHistory.push(stopMsg);
+  storage.saveMessage(stopMsg);
+  broadcast('chat:message', { msg: stopMsg });
+
+  console.log(`[Stop] ${a.name} (${a.id}) by ${stoppedBy}`);
   return true;
 }
 
@@ -1100,7 +1124,7 @@ async function parseAgentCommands(response: string, fromId: string): Promise<str
     const rawTarget = m[1] || m[2] || m[3];
     const target = findAgentByIdNameOrRole(rawTarget);
     const targetId = target ? target.id : rawTarget;
-    if (stopAgent(targetId)) results.push(`Stopped ${targetId}`);
+    if (stopAgent(targetId, 'orchestrator')) results.push(`Stopped ${targetId}`);
     else results.push(`Could not stop ${rawTarget}`);
   }
   const resumeRe = /\[?RESUME\s+(?:AGENT\s+)?(?:target-id|agent-id|target|id)=(?:"([^"]+)"|'([^']+)'|([^\s\]]+))\]?/gi;
@@ -1137,48 +1161,35 @@ async function parseAgentCommands(response: string, fromId: string): Promise<str
 
 // ============ TITLE POLLER ============
 // Periodically fetch missing titles for agents that have sessionId but no sessionTitle.
-// This catches titles that opencode generates asynchronously after the first turn.
+// TỐI ƯU HÓA: Chỉ poll gom nhóm 1 lần cho các agent thiếu title với chu kỳ 60s (tránh subprocess spam).
 let titlePollerTimer: ReturnType<typeof setInterval> | null = null;
 
 function startTitlePoller() {
   titlePollerTimer = setInterval(async () => {
-    for (const [id, agent] of agents) {
-      if (agent.sessionId && agent.type !== 'orchestrator') {
-        try {
-          const client = getClient(agent);
-          const stats = await client.getSessionStats(agent.sessionId);
-          if (stats) {
-            let updated = false;
-            if (stats.title && stats.title !== agent.sessionTitle) {
-              agent.sessionTitle = stats.title;
-              updated = true;
-            }
-            if (stats.tokenUsage) {
-              const prevTok = typeof agent.tokenUsage === 'object' ? agent.tokenUsage?.totalTokens : agent.tokenUsage;
-              const newTok = typeof stats.tokenUsage === 'object' ? stats.tokenUsage?.totalTokens : stats.tokenUsage;
-              if (newTok !== prevTok || !agent.tokenUsage) {
-                agent.tokenUsage = stats.tokenUsage;
-                updated = true;
-              }
-            }
-            if (stats.contextLength && stats.contextLength !== agent.contextLength) {
-              agent.contextLength = stats.contextLength;
-              updated = true;
-            }
-            if (updated) {
-              storage.updateAgent(agent.id, { 
-                sessionTitle: agent.sessionTitle, 
-                tokenUsage: agent.tokenUsage, 
-                contextLength: agent.contextLength 
-              });
-              broadcast('agent:updated', { agent });
-              console.log(`[TitlePoll] Updated stats for ${agent.name}: title="${agent.sessionTitle}" tokens=${agent.contextLength || 0}`);
-            }
-          }
-        } catch {}
+    // 1. Chỉ lọc ra các agent CÓ sessionId NHƯNG CHƯA CÓ sessionTitle
+    const agentsMissingTitle = Array.from(agents.values()).filter(a => a.sessionId && !a.sessionTitle && a.type !== 'orchestrator');
+    if (agentsMissingTitle.length === 0) return;
+
+    try {
+      // 2. Gom lại chỉ gọi CLI 'opencode session list' ĐÚNG 1 LẦN DUY NHẤT cho toàn bộ batch
+      const projectDir = process.cwd();
+      const { stdout } = await execAsync('opencode session list --format json', {
+        cwd: projectDir, encoding: 'utf-8', timeout: 5000
+      });
+      const sessions = JSON.parse(stdout) as any[];
+
+      // 3. Map kết quả cho các agent thiếu title
+      for (const agent of agentsMissingTitle) {
+        const found = sessions.find((s: any) => s.id === agent.sessionId);
+        if (found && (found.title || found.slug)) {
+          agent.sessionTitle = found.title || found.slug;
+          storage.updateAgent(agent.id, { sessionTitle: agent.sessionTitle });
+          broadcast('agent:updated', { agent });
+          console.log(`[TitlePoll] Resolved missing title for ${agent.name}: "${agent.sessionTitle}"`);
+        }
       }
-    }
-  }, 10000); // every 10 seconds
+    } catch {}
+  }, 60000); // Tăng interval từ 10s lên 60s
 }
 
 // Watchdog / auto-timeout has been disabled: agents only stop on explicit command from User or Orchestrator.
@@ -2553,7 +2564,7 @@ app.post('/api/agents/:id/start', (req, res) => {
 app.post('/api/agents/:id/stop', (req, res) => {
   const a = agents.get(req.params.id);
   if (!a) return res.status(404).json({ error: 'Not found' });
-  stopAgent(a.id); res.json({ ok: true });
+  stopAgent(a.id, 'user'); res.json({ ok: true });
 });
 
 app.post('/api/agents/:id/resume', (req, res) => {

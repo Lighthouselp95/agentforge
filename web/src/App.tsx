@@ -148,14 +148,6 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Polling mỗi 10s: làm tươi danh sách agents -> token badge & trạng thái không bị kẹt số cũ
-  useEffect(() => {
-    const t = setInterval(() => {
-      fetchAgents();
-    }, 10000);
-    return () => clearInterval(t);
-  }, []);
-
   // Phát hiện màn hình điện thoại (<768px) để chuyển sidebar thành drawer
   useEffect(() => {
     const onResize = () => {
@@ -827,8 +819,8 @@ export function App() {
       <div className="af-sidebar" style={sidebarStyle}>
         {/* Sidebar Header */}
         <div style={{ padding: '16px 14px', borderBottom: '1px solid #1e293b' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'nowrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap' }}>
               <div style={{
                 width: 28,
                 height: 28,
@@ -849,7 +841,7 @@ export function App() {
               {serverCwd && (
                 <span
                   onClick={() => { navigator.clipboard.writeText(serverCwd).catch(() => {}); }}
-                  title={`${serverCwd}\nClick để copy đường dẫn`}
+                  title={serverCwd}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -862,7 +854,11 @@ export function App() {
                     fontWeight: 500,
                     color: '#93c5fd',
                     cursor: 'pointer',
-                    wordBreak: 'break-all',
+                    maxWidth: 320,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
                     transition: 'background 0.15s',
                     lineHeight: '18px'
                   }}
