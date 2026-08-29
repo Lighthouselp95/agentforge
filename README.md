@@ -47,7 +47,7 @@ A GUI application that manages multiple coding agents via ACP (Agent Client Prot
 
 - **macOS / Linux**:
   ```bash
-  curl -fsSL https://opencode.ai/install.sh | bash
+  curl -fsSL https://opencode.ai/install | bash
   ```
 
 ### 2. Cấu hình API Key / Model:
