@@ -66,12 +66,15 @@ cd web && npm install && cd ..
 npm run dev
 
 # Open browser
-open http://localhost:3001
+open http://localhost:3001/v2
 ```
 Oneshot run at: Agentforge-web.exe release
 
 ## Usage
 
+0. **UI routes**:
+   - `http://localhost:3001/v2` — React UI đầy đủ (task card, tin giao việc, ThinkingBlock, transcript)
+   - `http://localhost:3001/` — legacy UI đơn giản (dist/index.html)
 1. **Chat**: Type a message → Orchestrator decomposes, spawns specialist agents, routes tasks
 2. **Spawn limits**: Max 3 agents per role (coder/tester/...). Exceeding → error with active agent list
 3. **Click an agent** (left sidebar) → view only that agent's conversation; title = opencode session title
