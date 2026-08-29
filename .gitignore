@@ -60,6 +60,9 @@ pnpm-debug.log*
 /*.md
 !/README.md
 electron/*.md
+# Internal prompts/docs — keep local only, not uploaded (avoid exposing tech)
+src/prompts/**/*.md
+docs/*.md
 
 # OS & Editor files
 .DS_Store
