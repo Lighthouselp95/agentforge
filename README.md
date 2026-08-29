@@ -39,11 +39,11 @@ A GUI application that manages multiple coding agents via ACP (Agent Client Prot
 Để các Agent có thể thực thi viết code và gọi mô hình AI, máy tính cần cài đặt **OpenCode CLI**:
 
 ### 1. Cài đặt OpenCode CLI:
-- **Windows (PowerShell)**:
+- **Windows (PowerShell)** — cần Node.js:
   ```powershell
-  irm https://opencode.ai/install.ps1 | iex
+  npm install -g opencode-ai
   ```
-  *(hoặc qua npm nếu đã có Node.js: `npm install -g @opencode-ai/cli` hoặc `scoop install opencode`)*
+  *(hoặc `scoop install opencode` nếu dùng Scoop)*
 
 - **macOS / Linux**:
   ```bash
