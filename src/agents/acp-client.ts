@@ -4,6 +4,8 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { openSync, writeSync, fsyncSync, closeSync, unlinkSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import net from 'net';
+import http from 'http';
 import { StringDecoder } from 'string_decoder';
 import type { AgentConfig, AgentMessage, TokenUsage, ToolCallInfo } from './types.js';
 import { storage } from '../storage.js';
@@ -12,6 +14,17 @@ const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
 // Giới hạn hàng đợi tin nhắn chờ xử lý cho 1 agent — chống phình bộ nhớ
 const MAX_PENDING = 20;
+
+export function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(port));
+    });
+    srv.on('error', reject);
+  });
+}
 
 export class ACPClient {
   // Shared map across all instances: agentId → sessionId
@@ -43,6 +56,7 @@ export class ACPClient {
   private busy = false;
   private pending: Array<{ prompt: string; resolve: (m: AgentMessage) => void; reject: (e: any) => void }> = [];
   private aborting = false; // Idempotency guard for abort()
+  public isCompacting = false;
   private needPromptReinject = false;
   private unprocessedPrompts: string[] = [];
   private onStatusChange?: (busy: boolean) => void;
@@ -253,6 +267,129 @@ export class ACPClient {
    * Khi luồng chính đang bận (this.busy === true), spawn ngay một tiến trình opencode riêng
    * để nạp prompt mới thẳng vào session SQLite database của OpenCode và tự thoát trong im lặng (0 UI interruption).
    */
+  async compactSessionViaEphemeralServer(sessionId: string): Promise<boolean> {
+    if (!sessionId) return false;
+    this.isCompacting = true;
+    let serverPid: number | undefined;
+    try {
+      const port = await findFreePort();
+      const serverCmd = isWin ? ['cmd.exe', '/c', `opencode serve --port ${port}`] : ['sh', '-c', `opencode serve --port ${port}`];
+      const child = spawn(serverCmd[0], serverCmd.slice(1), {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      });
+      child.unref();
+      if (!child.pid) {
+        throw new Error('Failed to obtain PID for OpenCode Serve');
+      }
+      serverPid = child.pid;
+
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const healthUrl = `${baseUrl}/global/health`;
+      const commandUrl = `${baseUrl}/session/${encodeURIComponent(sessionId)}/message`;
+
+      const timeoutMs = 10000;
+      const intervalMs = 150;
+      const start = Date.now();
+      let healthy = false;
+      while (Date.now() - start < timeoutMs) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const req = http.request(healthUrl, { method: 'GET', timeout: 2000 }, (res) => {
+              let data = '';
+              res.on('data', (chunk) => { data += chunk; });
+              res.on('end', () => {
+                if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
+                else reject(new Error(`Health not OK: ${res.statusCode}`));
+              });
+            });
+            req.on('error', reject);
+            req.on('timeout', () => {
+              req.destroy();
+              reject(new Error('Health timeout'));
+            });
+            req.end();
+          });
+          healthy = true;
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, intervalMs));
+        }
+      }
+
+      if (!healthy) {
+        throw new Error('OpenCode Serve did not become ready in time');
+      }
+
+      const postBody = JSON.stringify({
+        parts: [
+          {
+            type: 'text',
+            text: '/compact'
+          }
+        ]
+      });
+      await new Promise<void>((resolve, reject) => {
+        const req = http.request(commandUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 30000
+        }, (res) => {
+          let data = '';
+          res.on('data', (chunk) => { data += chunk; });
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
+            else reject(new Error(`Compact command failed: ${res.statusCode} ${data}`));
+          });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => {
+          req.destroy();
+          reject(new Error('Compact request timeout'));
+        });
+        req.write(postBody);
+        req.end();
+      });
+
+      return true;
+    } catch (err) {
+      console.error('[Compact] Ephemeral server compact failed:', err);
+      return false;
+    } finally {
+      if (typeof serverPid === 'number') {
+        const pidToKill = serverPid;
+        try {
+          if (isWin) {
+            execSync(`taskkill /pid ${pidToKill} /T /F`, { timeout: 3000, stdio: 'ignore' });
+          } else {
+            try { process.kill(-pidToKill, 'SIGTERM'); } catch {}
+            try { process.kill(pidToKill, 'SIGTERM'); } catch {}
+            const delayed = pidToKill;
+            setTimeout(() => {
+              try { process.kill(-delayed, 'SIGKILL'); } catch {}
+              try { process.kill(delayed, 'SIGKILL'); } catch {}
+            }, 2000);
+          }
+        } catch {}
+      }
+      this.isCompacting = false;
+      try {
+        this.runQueued('');
+      } catch {}
+    }
+  }
+
+  async compactSession(sessionId: string): Promise<boolean> {
+    if (this.isCompacting) return false;
+    return this.compactSessionViaEphemeralServer(sessionId);
+  }
+
+  /**
+   * Fire-and-Forget Injection Instance:
+   * Khi luồng chính đang bận (this.busy === true), spawn ngay một tiến trình opencode riêng
+   * để nạp prompt mới thẳng vào session SQLite database của OpenCode và tự thoát trong im lặng (0 UI interruption).
+   */
   async injectPromptAsync(prompt: string): Promise<{ success: boolean; pid?: number }> {
     if (!this.sessionId) {
       return { success: false };
@@ -272,7 +409,7 @@ export class ACPClient {
         idea: 'idea'
       };
       const agentName = roleToAgent[this.config.role] || this.config.role || (this.config.type === 'orchestrator' ? 'orchestrator' : 'coder');
-      let agentFlag = ` --agent ${agentName} --session "${this.sessionId}" --auto --format json`;
+      let agentFlag = ` --agent ${agentName} --session "${this.sessionId}" --thinking --auto --format json`;
       if (this.config.model) {
         agentFlag += ` --model "${this.config.model}"`;
       }
@@ -286,7 +423,7 @@ export class ACPClient {
         const cmdArgsRest = slashParts.slice(1).join(' ').trim();
         const messageArg = cmdArgsRest ? ` "${cmdArgsRest.replace(/"/g, '`"')}"` : '';
         const modelFlag = this.config.model ? ` --model "${this.config.model}"` : '';
-        const fullCmd = `opencode run${messageArg} --command "${cleanCmd}" --session "${this.sessionId}"${modelFlag} --auto --format json`;
+        const fullCmd = `opencode run${messageArg} --command "${cleanCmd}" --session "${this.sessionId}"${modelFlag} --thinking --auto --format json`;
         cmdArgs = isWin
           ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; ${fullCmd}`]
           : ['-c', fullCmd];
@@ -405,12 +542,15 @@ export class ACPClient {
       }
     }
 
-    const reminder = `\n\n=== SYSTEM REMINDER ===\nUse [TO: <target-id>] <message> for communications.\nFinish with [TO: orchestrator] Task complete. === TASK REPORT ===`;
+    const reminder = `\n\n=== SYSTEM REMINDER ===\nUse <talk target="<target-id>">your message</talk> or [TO: <target-id>] <message> for communications.\nFinish with <talk target="orchestrator">Task complete. === TASK REPORT === ...</talk> (or [TO: orchestrator] Task complete. === TASK REPORT ===)`;
     const combinedBody = messages.join('\n\n---\n\n');
     return `${contextPrefix ? contextPrefix + '\n\n' : ''}${header}\n${combinedBody}${reminder}`;
   }
 
   private async runQueued(prompt: string): Promise<AgentMessage> {
+    if (this.isCompacting) {
+      throw new Error('Agent is compacting session; please retry after compaction completes.');
+    }
     this.busy = true;
     try {
       this.onStatusChange?.(true);
@@ -478,7 +618,7 @@ export class ACPClient {
     };
     // Custom roles: check if .opencode/agents/<role>.md exists, use role name directly
     const agentName = roleToAgent[this.config.role] || this.config.role || (this.config.type === 'orchestrator' ? 'orchestrator' : 'coder');
-    let agentFlag = ` --agent ${agentName}`;
+    let agentFlag = ` --agent ${agentName} --thinking`;
     if (this.sessionId) {
       agentFlag += ` --session "${this.sessionId}"`;
     }
@@ -502,12 +642,13 @@ export class ACPClient {
       LC_ALL: 'en_US.UTF-8'
     };
 
-    const isSlash = prompt.trim().startsWith('/');
+    const isCompact = /^\s*\/compact\s*$/i.test(prompt);
+    const isSlash = isCompact || /^\/[a-zA-Z0-9_-]+(?:\s+.*)?$/.test(prompt.trim());
     const slashParts = isSlash ? prompt.trim().replace(/^\//, '').trim().split(/\s+/) : [];
-    const cleanCmd = slashParts[0] || '';
-    const cmdArgsRest = slashParts.slice(1).join(' ').trim();
+    const cleanCmd = isCompact ? 'compact' : (slashParts[0] || '');
+    const cmdArgsRest = isCompact ? '' : slashParts.slice(1).join(' ').trim();
 
-    if (isSlash && cleanCmd.toLowerCase() === 'compact') {
+    if (isCompact) {
       this.needPromptReinject = true;
       if (!this.sessionId) {
         return {
@@ -525,7 +666,7 @@ export class ACPClient {
       const sessionFlag = this.sessionId ? ` --session "${this.sessionId}"` : '';
       const modelFlag = modelToUse ? ` --model "${modelToUse}"` : '';
       const messageArg = cmdArgsRest ? ` "${cmdArgsRest.replace(/"/g, '`"')}"` : '';
-      const fullCmd = `opencode run${messageArg} --command "${cleanCmd}"${sessionFlag}${modelFlag} --auto --format json`;
+      const fullCmd = `opencode run${messageArg} --command "${cleanCmd}"${sessionFlag}${modelFlag} --thinking --auto --format json`;
       cmdArgs = isWin 
         ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; ${fullCmd}`]
         : ['-c', fullCmd];
@@ -640,7 +781,7 @@ export class ACPClient {
       }
 
       let finalContent = content || '(No response)';
-      if (isSlash && cleanCmd.toLowerCase() === 'compact' && (!content || content === '(No response)')) {
+      if (isCompact && (!content || content === '(No response)')) {
         finalContent = '⚡ Session compacted successfully. Context history optimized.';
       }
 

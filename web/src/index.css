@@ -24,6 +24,47 @@ html[data-theme='dark'] {
   --report-label: #fde047;
   --af-bg-sidebar: #0f172a;
 
+  /* ===== Workbench Tokens — DARK (One Dark / Catppuccin Mocha inspired) ===== */
+  --wb-activity-bg: #0b0f1a;
+  --wb-activity-icon: #94a3b8;
+  --wb-activity-icon-active: #f8fafc;
+  --wb-activity-border: rgba(148, 163, 184, 0.14);
+  --wb-tab-bg: #111827;
+  --wb-tab-active: #0f172a;
+  --wb-tab-hover: rgba(148, 163, 184, 0.10);
+  --wb-tab-border: rgba(148, 163, 184, 0.20);
+  --wb-statusbar-bg: #0b0f1a;
+  --wb-statusbar-text: #94a3b8;
+  --wb-panel-bg: #0d1526;
+  --wb-panel-border: rgba(148, 163, 184, 0.14);
+  --wb-tree-hover: rgba(148, 163, 184, 0.10);
+  --wb-tree-active: rgba(59, 130, 246, 0.16);
+  --wb-chat-tab-bg: #0d1526;
+  --wb-chat-tab-active: #0f172a;
+  --wb-chat-tab-hover: rgba(148, 163, 184, 0.08);
+  --wb-chat-tab-border: rgba(148, 163, 184, 0.18);
+  --wb-success: #4ade80;
+  --wb-success-strong: #34d399;
+  --wb-success-bg: rgba(34, 197, 94, 0.14);
+  --wb-success-border: rgba(34, 197, 94, 0.32);
+  --wb-danger: #f87171;
+  --wb-danger-strong: #ef4444;
+  --wb-danger-bg: rgba(239, 68, 68, 0.14);
+  --wb-danger-border: rgba(239, 68, 68, 0.35);
+  --wb-warn: #fbbf24;
+  --wb-warn-bg: rgba(250, 204, 21, 0.12);
+  --wb-warn-border: rgba(250, 204, 21, 0.35);
+  --wb-info: #38bdf8;
+  --wb-info-bg: rgba(56, 189, 248, 0.12);
+  --wb-info-border: rgba(56, 189, 248, 0.3);
+  --wb-purple: #a5b4fc;
+  --wb-purple-bg: rgba(99, 102, 241, 0.1);
+  --wb-purple-border: rgba(99, 102, 241, 0.22);
+  --wb-cyan: #22d3ee;
+  --wb-muted: #64748b;
+  --wb-token-bg: rgba(56, 189, 248, 0.12);
+  --wb-token-border: rgba(56, 189, 248, 0.25);
+
   /* Legacy aliases (giữ tương thích biến cũ trong codebase) */
   --bg-primary: var(--bg-main);
   --bg-secondary: var(--bg-panel);
@@ -53,6 +94,47 @@ html[data-theme='light'] {
   --report-label: #b45309;
   --af-bg-sidebar: #f8fafc;
 
+  /* ===== Workbench Tokens — LIGHT (clean minimal) ===== */
+  --wb-activity-bg: #eef2f7;
+  --wb-activity-icon: #475569;
+  --wb-activity-icon-active: #0f172a;
+  --wb-activity-border: rgba(15, 23, 42, 0.10);
+  --wb-tab-bg: #e8edf4;
+  --wb-tab-active: #ffffff;
+  --wb-tab-hover: rgba(15, 23, 42, 0.06);
+  --wb-tab-border: rgba(15, 23, 42, 0.12);
+  --wb-statusbar-bg: #eef2f7;
+  --wb-statusbar-text: #475569;
+  --wb-panel-bg: #ffffff;
+  --wb-panel-border: rgba(15, 23, 42, 0.10);
+  --wb-tree-hover: rgba(15, 23, 42, 0.06);
+  --wb-tree-active: rgba(37, 99, 235, 0.12);
+  --wb-chat-tab-bg: #f1f5f9;
+  --wb-chat-tab-active: #ffffff;
+  --wb-chat-tab-hover: rgba(15, 23, 42, 0.06);
+  --wb-chat-tab-border: rgba(15, 23, 42, 0.12);
+  --wb-success: #16a34a;
+  --wb-success-strong: #059669;
+  --wb-success-bg: rgba(22, 163, 74, 0.1);
+  --wb-success-border: rgba(22, 163, 74, 0.3);
+  --wb-danger: #dc2626;
+  --wb-danger-strong: #b91c1c;
+  --wb-danger-bg: rgba(220, 38, 38, 0.1);
+  --wb-danger-border: rgba(220, 38, 38, 0.3);
+  --wb-warn: #b45309;
+  --wb-warn-bg: rgba(180, 83, 9, 0.1);
+  --wb-warn-border: rgba(180, 83, 9, 0.3);
+  --wb-info: #0284c7;
+  --wb-info-bg: rgba(2, 132, 199, 0.1);
+  --wb-info-border: rgba(2, 132, 199, 0.3);
+  --wb-purple: #6d28d9;
+  --wb-purple-bg: rgba(109, 40, 217, 0.1);
+  --wb-purple-border: rgba(109, 40, 217, 0.25);
+  --wb-cyan: #0891b2;
+  --wb-muted: #64748b;
+  --wb-token-bg: rgba(2, 132, 199, 0.1);
+  --wb-token-border: rgba(2, 132, 199, 0.28);
+
   /* Legacy aliases */
   --bg-primary: var(--bg-main);
   --bg-secondary: var(--bg-panel);
@@ -70,13 +152,19 @@ html[data-theme='light'] {
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   overflow: hidden;
   overscroll-behavior: none;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  text-rendering: optimizeLegibility;
 }
 
 /* Mobile: neo đúng viewport động (thanh address bar ẩn/hiện), chống tràn trang */

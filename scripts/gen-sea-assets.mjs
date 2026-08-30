@@ -22,8 +22,8 @@ if (existsSync(join(root, 'dist', 'index.html'))) {
 walk(join(root, 'web', 'dist'), 'web/dist', assets);
 walk(join(root, 'src', 'prompts'), 'src/prompts', assets);
 
-if (!assets['web/dist/index.html']) {
-  console.error('[gen-sea-assets] web/dist/index.html khong ton tai — chay `npm run build` truoc.');
+if (!assets['web/dist/index.html'] && !assets['dist/index.html']) {
+  console.error('[gen-sea-assets] index.html khong ton tai trong web/dist hoac dist — chay `npm run build` truoc.');
   process.exit(1);
 }
 

@@ -1,0 +1,245 @@
+/* ============================================================
+   WORKBENCH — VS Code-style layout (activity bar, tabs, status
+   bar, bottom panel). Dùng VAR(--) TOKEN, KHÔNG hex cứng.
+   ============================================================ */
+
+/* ===== ACTIVITY BAR (dọc trái ~48px) ===== */
+.af-activitybar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 48px;
+  min-width: 48px;
+  background: var(--wb-activity-bg);
+  border-right: 1px solid var(--wb-activity-border);
+  flex-shrink: 0;
+  padding: 6px 0;
+  gap: 4px;
+  user-select: none;
+}
+
+.af-activitybar-item {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--wb-activity-icon);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  position: relative;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.af-activitybar-item:hover {
+  background: var(--wb-tree-hover);
+  color: var(--wb-activity-icon-active);
+}
+
+.af-activitybar-item.af-active {
+  color: var(--wb-activity-icon-active);
+}
+
+/* Cạnh trái (VS Code-style indicator) */
+.af-activitybar-item.af-active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  background: var(--accent);
+  border-radius: 0 3px 3px 0;
+}
+
+.af-activitybar-title {
+  font-size: 10px;
+  color: var(--wb-activity-icon);
+  margin-top: 4px;
+}
+
+/* ===== STATUS BAR (đáy) ===== */
+.af-statusbar {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  background: var(--wb-statusbar-bg);
+  color: var(--wb-statusbar-text);
+  border-top: 1px solid var(--wb-activity-border);
+  padding: 0 10px;
+  gap: 14px;
+  font-size: 11px;
+  flex-shrink: 0;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.af-statusbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--wb-statusbar-text);
+  cursor: default;
+}
+
+.af-statusbar-item.af-clickable {
+  cursor: pointer;
+}
+
+.af-statusbar-item:hover.af-clickable {
+  background: var(--wb-tree-hover);
+}
+
+.af-statusbar-spacer {
+  flex: 1;
+}
+
+/* ===== BOTTOM PANEL (collapsible) ===== */
+.af-bottompanel {
+  display: flex;
+  flex-direction: column;
+  background: var(--wb-panel-bg);
+  border-top: 1px solid var(--wb-panel-border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.af-bottompanel-header {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--wb-panel-bg);
+  border-bottom: 1px solid var(--wb-panel-border);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.af-bottompanel-body {
+  overflow-y: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ===== TAB BAR (VS Code editor tabs trên ChatPanel) ===== */
+.af-tabbar {
+  display: flex;
+  align-items: flex-end;
+  height: 34px;
+  background: var(--wb-chat-tab-bg);
+  border-bottom: 1px solid var(--wb-chat-tab-border);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.af-tabbar::-webkit-scrollbar {
+  display: none;
+}
+
+.af-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  min-width: 120px;
+  max-width: 200px;
+  padding: 0 10px;
+  background: var(--wb-chat-tab-bg);
+  color: var(--text-secondary);
+  border-right: 1px solid var(--wb-chat-tab-border);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.af-tab:hover {
+  background: var(--wb-chat-tab-hover);
+}
+
+.af-tab.af-active {
+  background: var(--wb-chat-tab-active);
+  color: var(--text-primary);
+  border-top: 2px solid var(--accent);
+}
+
+.af-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.af-tab-close:hover {
+  background: var(--wb-tree-hover);
+  color: var(--text-primary);
+}
+
+.af-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.af-tab-dot.working {
+  background: var(--wb-success);
+  box-shadow: 0 0 5px var(--wb-success);
+}
+
+.af-tab-dot.blocked {
+  background: var(--wb-danger);
+}
+
+.af-tab-dot.idle {
+  background: var(--wb-muted);
+}
+
+.af-tab-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.af-tab-role {
+  color: var(--text-muted);
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Spinner nhỏ báo đang working trên tab */
+.af-tab-spin {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 2px solid var(--wb-success-bg);
+  border-top-color: var(--wb-success);
+  border-radius: 50%;
+  animation: af-spin 0.8s linear infinite;
+}
+
+@keyframes af-spin {
+  to { transform: rotate(360deg); }
+}

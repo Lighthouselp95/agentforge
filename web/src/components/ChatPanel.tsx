@@ -1,11 +1,5 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, Component } from 'react';
-// Queue bar animation keyframes (injected once)
-if (typeof document !== 'undefined' && !document.getElementById('af-queue-style')) {
-  const st = document.createElement('style');
-  st.id = 'af-queue-style';
-  st.textContent = `@keyframes af-queue-slide{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`;
-  document.head.appendChild(st);
-}
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback, Component } from 'react';
+import { highlight, isSupportedLang } from '../utils/highlight';
 
 interface Message {
   id: string;
@@ -13,6 +7,7 @@ interface Message {
   role?: string;
   content: string;
   timestamp?: number | string;
+  thinking?: string;
 }
 
 interface ChatMsg {
@@ -24,9 +19,13 @@ interface ChatMsg {
   agentName?: string;
   agentRole?: string;
   msgType?: string;
+  showOnUI?: boolean;
   // Toolcall cấu trúc từ event gốc opencode (backend gửi kèm trong payload)
   toolCalls?: Array<{ tool: string; input?: string; output?: string }>;
   thinking?: string;
+  // Ordered parts (Option C): text + tool xen kẽ theo ĐÚNG thứ tự opencode emit — server gửi trong final snapshot.
+  // Client render trực tiếp theo array. OPTIONAL (không có → render theo cách cũ).
+  parts?: Array<{ type: 'text' | 'tool'; content?: string; tool?: string; input?: string; output?: string }>;
 }
 
 interface AgentInfo {
@@ -37,24 +36,31 @@ interface AgentInfo {
 
 function stripTalkTags(text: string): string {
   if (!text) return '';
-  const strText = String(text);
-  let result = '';
+  let result = String(text);
+
+  // 1. Strip XML talk opening tags with routing attributes ONLY: <talk target="..." task="...">
+  // Tuyệt đối không xóa thẻ `<talk>` trần không có thuộc tính định tuyến để bảo toàn chữ `<talk>` trong inline code / văn bản
+  result = result.replace(/<talk\s+[^>]*\b(?:target|to|agent|id|role|name)\s*=[^>]*>/gi, '');
+
+  // 2. Strip bracket [TALK target=...] tags
+  const strText = result;
+  let out = '';
   let pos = 0;
   const lower = strText.toLowerCase();
-  while (pos < text.length) {
+  while (pos < strText.length) {
     const talkIdx = lower.indexOf('[talk', pos);
     if (talkIdx === -1) {
-      result += text.substring(pos);
+      out += strText.substring(pos);
       break;
     }
-    result += text.substring(pos, talkIdx);
+    out += strText.substring(pos, talkIdx);
     let i = talkIdx + 5; // length of '[talk'
     let inQuotes: string | null = null;
     let foundClose = false;
-    while (i < text.length) {
-      const char = text[i];
+    while (i < strText.length) {
+      const char = strText[i];
       if (inQuotes) {
-        if (char === inQuotes && text[i - 1] !== '\\') {
+        if (char === inQuotes && strText[i - 1] !== '\\') {
           inQuotes = null;
         }
       } else {
@@ -68,18 +74,28 @@ function stripTalkTags(text: string): string {
       i++;
     }
     if (foundClose) {
-      pos = i + 1;
+      // Check if it's a real command tag with attributes or just conversational [TALK]
+      const tagContent = strText.substring(talkIdx, i + 1);
+      const isRealCommand = /\b(?:target|agent|agent-id|agent_id|target-id|target_id|to|id)\s*=/i.test(tagContent);
+      if (isRealCommand) {
+        pos = i + 1;
+      } else {
+        out += strText.substring(talkIdx, i + 1);
+        pos = i + 1;
+      }
     } else {
-      const fallbackMatch = text.substring(talkIdx).match(/^\[talk[\s\S]*?\]/i);
+      const fallbackMatch = strText.substring(talkIdx).match(/^\[talk\s+[\s\S]*?\]/i);
       if (fallbackMatch) {
         pos = talkIdx + fallbackMatch[0].length;
       } else {
-        result += text.substring(talkIdx, talkIdx + 5);
+        out += strText.substring(talkIdx, talkIdx + 5);
         pos = talkIdx + 5;
       }
     }
   }
-  return result.replace(/^\s+/, '').replace(/\n{3,}/g, '\n\n').trim();
+  // Strip bracket closing tag [/TALK]
+  out = out.replace(/\[\/talk\]/gi, '');
+  return out.replace(/^\s+/, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function formatTimestamp(timestamp?: number | string): string {
@@ -269,8 +285,81 @@ function getLangBadge(lang: string) {
   return <span style={{ marginRight: 6 }}>📄</span>;
 }
 
+// ============ FILE PATH → LANG (cho highlight WriteFileViewer / ReadFileViewer) ============
+// Map extension sang chuỗi lang khớp registry highlight.ts (js/jsx/ts/tsx/json/md/html/css/scss/py).
+// Trả về '' nếu không nhận diện → fallback plain (không highlight), giữ hiệu năng.
+function langFromPath(path: string): string {
+  if (!path) return '';
+  const base = String(path).toLowerCase().trim();
+  const extMatch = base.match(/(?:^|[.])([a-z0-9]+)$/);
+  if (!extMatch) return '';
+  const ext = extMatch[1];
+  if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'js';
+  if (ext === 'ts' || ext === 'tsx' || ext === 'mts' || ext === 'cts') return 'ts';
+  if (ext === 'json' || ext === 'jsonc') return 'json';
+  if (ext === 'md' || ext === 'markdown') return 'md';
+  if (ext === 'html' || ext === 'htm' || ext === 'xml' || ext === 'svg') return 'html';
+  if (ext === 'css' || ext === 'scss' || ext === 'sass' || ext === 'less') return 'css';
+  if (ext === 'py' || ext === 'python') return 'py';
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || ext === 'ps1') return 'bash';
+  return '';
+}
+
+// ============ FILE EXTENSION → ICON GLYPH + MÀU (VS Code style) ============
+// Tạo box glyph nhỏ có màu riêng theo extension cho tiêu đề tool read/write.
+// KHÔNG dùng thư viện icon (app nhẹ theo tiêu chí) — chỉ ký tự unicode + màu.
+const EXT_ICON: Record<string, { glyph: string; color: string; bg: string }> = {
+  ts:  { glyph: 'TS',  color: '#ffffff', bg: '#3178c6' },
+  tsx: { glyph: 'TSX', color: '#ffffff', bg: '#3178c6' },
+  mts: { glyph: 'TS',  color: '#ffffff', bg: '#3178c6' },
+  cts: { glyph: 'TS',  color: '#ffffff', bg: '#3178c6' },
+  js:  { glyph: 'JS',  color: '#000000', bg: '#f7df1e' },
+  jsx: { glyph: 'JSX', color: '#000000', bg: '#f7df1e' },
+  mjs: { glyph: 'JS',  color: '#000000', bg: '#f7df1e' },
+  cjs: { glyph: 'JS',  color: '#000000', bg: '#f7df1e' },
+  json: { glyph: '{ }', color: '#f97316', bg: 'transparent' },
+  jsonc: { glyph: '{ }', color: '#f97316', bg: 'transparent' },
+  md:  { glyph: 'M↓',  color: '#ffffff', bg: '#4aa3df' },
+  markdown: { glyph: 'M↓', color: '#ffffff', bg: '#4aa3df' },
+  html: { glyph: '</>', color: '#ffffff', bg: '#e34f26' },
+  htm:  { glyph: '</>', color: '#ffffff', bg: '#e34f26' },
+  xml:  { glyph: '</>', color: '#ffffff', bg: '#e34f26' },
+  svg:  { glyph: 'SVG', color: '#ffffff', bg: '#ffb13b' },
+  css:  { glyph: '#',   color: '#ffffff', bg: '#1572b6' },
+  scss: { glyph: '#',   color: '#ffffff', bg: '#cd6799' },
+  sass: { glyph: '#',   color: '#ffffff', bg: '#cd6799' },
+  less: { glyph: '#',   color: '#ffffff', bg: '#1d365d' },
+  py:   { glyph: 'PY',  color: '#ffffff', bg: '#3776ab' },
+  python: { glyph: 'PY', color: '#ffffff', bg: '#3776ab' },
+  sh:   { glyph: '>_',  color: '#ffffff', bg: '#3e8635' },
+  bash: { glyph: '>_',  color: '#ffffff', bg: '#3e8635' },
+  zsh:  { glyph: '>_',  color: '#ffffff', bg: '#3e8635' },
+  ps1:  { glyph: '>_',  color: '#ffffff', bg: '#3e8635' }
+};
+
+function extIcon(path: string): React.ReactNode {
+  if (!path) return <span style={{ marginRight: 6, color: '#94a3b8' }}>◇</span>;
+  const base = String(path).toLowerCase().trim();
+  const m = base.match(/(?:^|[.])([a-z0-9]+)$/);
+  const ext = m ? m[1] : '';
+  const cfg = EXT_ICON[ext];
+  if (!cfg) return <span style={{ marginRight: 6, color: '#94a3b8' }}>📄</span>;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      minWidth: 18, height: 16, marginRight: 6, borderRadius: 3, padding: '0 3px',
+      background: cfg.bg, color: cfg.color, fontWeight: 700, fontSize: 10,
+      fontFamily: 'monospace', boxSizing: 'border-box'
+    }}>{cfg.glyph}</span>
+  );
+}
+
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const [copied, setCopied] = useState(false);
+
+  // Chỉ tokenize khi ngôn ngữ được hỗ trợ — fallback plain text giữ hiệu năng tối đa
+  const supported = useMemo(() => isSupportedLang(lang), [lang]);
+  const tokens = useMemo(() => (supported ? highlight(code, lang) : []), [supported, code, lang]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
@@ -328,44 +417,204 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         margin: 0,
         padding: '10px 14px',
         overflowX: 'auto',
+        maxWidth: '100%',
         fontSize: 12.5,
         lineHeight: 1.55,
         color: 'var(--text-primary)',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
       }}>
-        <code>{code}</code>
+        {supported ? (
+          <code>{tokens.map((t, i) => (
+            <span
+              key={i}
+              style={{
+                color: t.color || undefined,
+                fontStyle: t.italic ? 'italic' : undefined,
+                fontWeight: t.bold ? 700 : undefined
+              }}
+            >
+              {t.text}
+            </span>
+          ))}</code>
+        ) : (
+          <code>{code}</code>
+        )}
       </pre>
     </div>
   );
 }
 
-function ReportCard({ title, content }: { title: string; content: string }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+function parseXmlAttributes(attrStr: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  if (!attrStr) return attrs;
+  const regex = /([a-zA-Z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+  let match;
+  while ((match = regex.exec(attrStr)) !== null) {
+    const key = match[1].toLowerCase();
+    const val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : (match[4] || ''));
+    attrs[key] = val;
+  }
+  return attrs;
+}
 
-  const parsedFields: Array<{ label: string; value: string }> = [];
-  let currentLabel = '';
-  let currentValue = '';
+interface SplitMessageResult {
+  conversationText: string;
+  hasReport: boolean;
+  reportTitle?: string;
+  reportContent?: string;
+}
 
-  for (const line of lines) {
-    const match = line.match(/^([A-Z_0-9]+):\s*(.*)$/);
-    if (match) {
-      if (currentLabel) {
-        parsedFields.push({ label: currentLabel, value: currentValue.trim() });
-      }
-      currentLabel = match[1];
-      currentValue = match[2] || '';
-    } else {
-      if (currentLabel) {
-        currentValue += (currentValue ? '\n' : '') + line;
-      } else {
-        currentLabel = 'CONTENT';
-        currentValue = line;
-      }
+function splitReportAndConversation(content: string): SplitMessageResult {
+  if (!content) return { conversationText: '', hasReport: false };
+
+  let text = String(content || '').normalize('NFC');
+
+  // Code Span Masking: Tạm thời thay thế nội dung trong ```...``` hoặc `...` bằng placeholder
+  // để bảo vệ các ví dụ mẫu XML/command bên trong code blocks không bị regex xóa nhầm
+  const codeBlocks: string[] = [];
+  text = text.replace(/```[\s\S]*?```|`[^`\n]+`/g, (match) => {
+    const token = `__AF_CODE_BLOCK_${codeBlocks.length}__`;
+    codeBlocks.push(match);
+    return token;
+  });
+
+  // 1. Strip all <talk target="...">...</talk> blocks completely (tags + internal dispatch payload)
+  text = text.replace(/<talk\s+[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id)\s*=[^>]*>[\s\S]*?<\/talk>/gi, '');
+  text = text.replace(/<talk\s+[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id)\s*=[^>]*\/>/gi, '');
+  text = text.replace(/<talk\s+[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id)\s*=[^>]*>[\s\S]*?(?=(?:<\s*(?:talk|spawn|stop|resume|create_role)\b|\[(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE)\b|$))/gi, '');
+  text = text.replace(/\[TALK\s+[^\]]*\]/gi, '');
+
+  // 2. Strip all <spawn ...> blocks completely
+  text = text.replace(/<spawn\s+[^>]*>[\s\S]*?<\/spawn>/gi, '');
+  text = text.replace(/<spawn\s+[^>]*\/?>/gi, '');
+  text = text.replace(/\[SPAWN\s+[^\]]*\]/gi, '');
+
+  // 3. Clean technical routing tags and headers
+  text = text.replace(/(?:\[FROM:\s*[^\]]+\]\s*)?\[TO:\s*[^\]]+\]\s*(?:Task complete\.?)?/gi, '');
+  text = text.replace(/^\s*\[TASK\][^\n]*\n?/gmi, '');
+
+  // Khôi phục lại các code blocks đã được bảo vệ an toàn
+  for (let i = 0; i < codeBlocks.length; i++) {
+    text = text.replace(`__AF_CODE_BLOCK_${i}__`, codeBlocks[i]);
+  }
+
+  // 4. Extract structured report block if present (XML <report>...</report> or Bracket === TASK REPORT ===)
+  // 4.1. XML Report: <report type="task" status="completed" ...> ... </report>
+  const xmlReportRe = /<(?:\s*(report|task_report|task-report|error_report|error-report))\b([^>]*)>([\s\S]*?)<\/\s*(?:report|task_report|task-report|error_report|error-report)\s*>/iu;
+  const xmlMatch = text.match(xmlReportRe);
+
+  if (xmlMatch && xmlMatch.index !== undefined) {
+    const rawTag = xmlMatch[1].toLowerCase();
+    const attrText = xmlMatch[2] || '';
+    const reportContent = xmlMatch[3].trim();
+    const attrs = parseXmlAttributes(attrText);
+    const reportTitle = (attrs['type'] || rawTag.replace(/[-_]+/g, ' ')).toUpperCase();
+
+    const beforeText = text.substring(0, xmlMatch.index).trim();
+    const afterText = text.substring(xmlMatch.index + xmlMatch[0].length).trim();
+    let conversationText = [beforeText, afterText].filter(Boolean).join('\n\n').trim();
+    conversationText = conversationText.replace(/__AF_CODE_BLOCK_(\d+)__/g, (_, idx) => codeBlocks[Number(idx)] || '');
+
+    return {
+      conversationText,
+      hasReport: true,
+      reportTitle: reportTitle.includes('REPORT') ? reportTitle : `${reportTitle} REPORT`,
+      reportContent
+    };
+  }
+
+  // 4.2. Bracket Report: === TASK REPORT === ... === END REPORT ===
+  const reportRe = /(?:^|\n)[ \t]*===\s*([A-Z_ ]+REPORT)\s*===[ \t]*\r?\n([\s\S]*?)(?:[ \t]*===\s*END[^\n=]*REPORT\s*===[ \t]*(?:\r?\n|$)|$)/iu;
+  const match = text.match(reportRe);
+
+  if (match && match.index !== undefined) {
+    const reportTitle = match[1].trim();
+    const reportContent = match[2].trim();
+
+    // 3-Tier Structured Validation:
+    // Tier 1: Check for presence of core report markers (AGENT_ID, STATUS, ROLE, WHAT I DID, FILES, REQUIREMENTS)
+    const hasCoreMarker = /\b(?:AGENT_ID|STATUS|ROLE|WHAT I DID|FILES|REQUIREMENTS_CHECKED|ERROR|BUG|VERDICT|KEY_DECISIONS)\s*:/iu.test(reportContent) ||
+      (reportContent.startsWith('{') && reportContent.includes('"agent_id"'));
+    // Tier 2: Check if content has at least 1-2 structured key-value fields or valid JSON
+    const fieldCount = (reportContent.match(/^[A-Z_0-9]+:\s*/gmu) || []).length;
+    const isRealReport = hasCoreMarker && (fieldCount >= 1 || reportContent.startsWith('{'));
+
+    if (isRealReport) {
+      // Everything before and after the report block is conversational text
+      const beforeText = text.substring(0, match.index).trim();
+      const afterText = text.substring(match.index + match[0].length).trim();
+      let conversationText = [beforeText, afterText].filter(Boolean).join('\n\n').trim();
+      conversationText = conversationText.replace(/__AF_CODE_BLOCK_(\d+)__/g, (_, idx) => codeBlocks[Number(idx)] || '');
+
+      return {
+        conversationText,
+        hasReport: true,
+        reportTitle,
+        reportContent
+      };
     }
   }
-  if (currentLabel) {
-    parsedFields.push({ label: currentLabel, value: currentValue.trim() });
+
+  let conversationText = text.trim().replace(/__AF_CODE_BLOCK_(\d+)__/g, (_, idx) => codeBlocks[Number(idx)] || '');
+
+  return {
+    conversationText,
+    hasReport: false
+  };
+}
+
+function ReportCard({ title, content }: { title: string; content: string }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const parsedFields: Array<{ label: string; value: string }> = [];
+
+  const rawTrimmed = (content || '').trim();
+
+  // 1. Try parsing JSON if content is JSON
+  if (rawTrimmed.startsWith('{') && rawTrimmed.endsWith('}')) {
+    try {
+      const obj = JSON.parse(rawTrimmed);
+      for (const [k, v] of Object.entries(obj)) {
+        const valStr = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v);
+        parsedFields.push({ label: k.toUpperCase(), value: valStr });
+      }
+    } catch {}
+  }
+
+  // 2. Try parsing XML tags like <status>...</status> or <files>...</files>
+  if (parsedFields.length === 0 && /<[a-zA-Z_0-9-]+>[\s\S]*?<\/[a-zA-Z_0-9-]+>/.test(rawTrimmed)) {
+    const xmlFieldRe = /<([a-zA-Z_0-9-]+)>([\s\S]*?)<\/\1>/g;
+    let xm: RegExpExecArray | null;
+    while ((xm = xmlFieldRe.exec(rawTrimmed)) !== null) {
+      parsedFields.push({ label: xm[1].toUpperCase().replace(/[-_]+/g, ' '), value: xm[2].trim() });
+    }
+  }
+
+  // 3. Fallback to standard KEY: VALUE line parsing
+  if (parsedFields.length === 0) {
+    const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    let currentLabel = '';
+    let currentValue = '';
+
+    for (const line of lines) {
+      const match = line.match(/^([A-Z_0-9]+):\s*(.*)$/i);
+      if (match) {
+        if (currentLabel) {
+          parsedFields.push({ label: currentLabel.toUpperCase(), value: currentValue.trim() });
+        }
+        currentLabel = match[1];
+        currentValue = match[2] || '';
+      } else {
+        if (currentLabel) {
+          currentValue += (currentValue ? '\n' : '') + line;
+        } else {
+          currentLabel = 'CONTENT';
+          currentValue = line;
+        }
+      }
+    }
+    if (currentLabel) {
+      parsedFields.push({ label: currentLabel.toUpperCase(), value: currentValue.trim() });
+    }
   }
 
   return (
@@ -410,8 +659,9 @@ function ReportCard({ title, content }: { title: string; content: string }) {
         <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
           {parsedFields.map((field, fIdx) => {
             const isStatus = field.label === 'STATUS';
-            const isCompleted = field.value.toLowerCase().includes('completed') || field.value.toLowerCase().includes('passed');
-            const isError = field.value.toLowerCase().includes('blocked') || field.value.toLowerCase().includes('failed') || field.value.toLowerCase().includes('error');
+            const isCompleted = String(field.value || '').toLowerCase().includes('completed') || String(field.value || '').toLowerCase().includes('passed');
+            const isError = String(field.value || '').toLowerCase().includes('blocked') || String(field.value || '').toLowerCase().includes('failed') || String(field.value || '').toLowerCase().includes('error');
+            const isFiles = field.label === 'FILES';
             
             return (
               <div key={fIdx} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -433,6 +683,24 @@ function ReportCard({ title, content }: { title: string; content: string }) {
                     }}>
                       {isCompleted ? '✓ ' : isError ? '✕ ' : ''}{field.value}
                     </span>
+                  ) : isFiles ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {field.value.split(/\s*,\s*|\s*\n\s*/).filter(Boolean).map((file, fi) => (
+                        <div key={fi} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '3px 8px',
+                          borderRadius: 4,
+                          background: 'rgba(255, 255, 255, 0.04)',
+                          fontFamily: 'monospace',
+                          fontSize: 12
+                        }}>
+                          <span style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>📄</span>
+                          <span style={{ color: '#93c5fd' }}>{file.trim()}</span>
+                        </div>
+                      ))}
+                    </div>
                   ) : (
                     renderInlineMarkdown(field.value)
                   )}
@@ -447,14 +715,16 @@ function ReportCard({ title, content }: { title: string; content: string }) {
 }
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
+  if (!text) return [];
+  const safeText = String(text).normalize('NFC');
   const nodes: React.ReactNode[] = [];
-  const regex = /(`[^`]+`|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\([^)]+\))/g;
+  const regex = /(`[^`]+`|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\([^)]+\))/gu;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = regex.exec(safeText)) !== null) {
     if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
+      nodes.push(safeText.slice(lastIndex, match.index));
     }
     const token = match[0];
     const key = `inline-${match.index}-${token.length}`;
@@ -481,7 +751,7 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     } else if (token.startsWith('~~') && token.endsWith('~~')) {
       nodes.push(<del key={key} style={{ opacity: 0.6 }}>{token.slice(2, -2)}</del>);
     } else if (token.startsWith('[') && token.includes('](')) {
-      const parts = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      const parts = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/u);
       if (parts) {
         nodes.push(
           <a key={key} href={parts[2]} target="_blank" rel="noreferrer" style={{ color: '#60a5fa', textDecoration: 'underline' }}>
@@ -497,8 +767,8 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     lastIndex = regex.lastIndex;
   }
 
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
+  if (lastIndex < safeText.length) {
+    nodes.push(safeText.slice(lastIndex));
   }
 
   return nodes;
@@ -506,7 +776,8 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
 
 function splitMarkdownSections(content: string): Array<{ type: 'code' | 'md'; content: string; lang?: string }> {
   const sections: Array<{ type: 'code' | 'md'; content: string; lang?: string }> = [];
-  const lines = content.split(/\r?\n/);
+  const safeContent = String(content || '').normalize('NFC');
+  const lines = safeContent.split(/\r?\n/);
   
   let inCode = false;
   let codeFenceLength = 0;
@@ -557,14 +828,13 @@ function splitMarkdownSections(content: string): Array<{ type: 'code' | 'md'; co
   return sections;
 }
 
-function MarkdownRenderer({ content, isReport }: { content: string; isReport?: boolean }) {
+function MarkdownRenderer({ content }: { content: string }) {
   if (!content) return null;
 
   const sections = splitMarkdownSections(content);
-  const skipReportBlock = Boolean(isReport);
 
   return (
-    <div className="af-markdown" style={{ display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.6 }}>
+    <div className="af-markdown" style={{ display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.6, minWidth: 0, maxWidth: '100%' }}>
       {sections.map((sec, secIdx) => {
         if (sec.type === 'code') {
           return <CodeBlock key={`sec-${secIdx}`} code={sec.content} lang={sec.lang || ''} />;
@@ -585,9 +855,9 @@ function MarkdownRenderer({ content, isReport }: { content: string; isReport?: b
             continue;
           }
 
-          // Structured Report Block: === TASK REPORT === ... === END REPORT ===
+          // Structured Report Block fallback
           const reportMatch = trimmed.match(/^===\s*([A-Z_ ]+REPORT)\s*===/i);
-          if (reportMatch && !skipReportBlock) {
+          if (reportMatch) {
             const reportTitle = reportMatch[1].trim();
             const reportLines: string[] = [];
             i++; // skip start marker
@@ -603,11 +873,21 @@ function MarkdownRenderer({ content, isReport }: { content: string; isReport?: b
             );
             continue;
           }
-          if (reportMatch && skipReportBlock) {
-            // Hide report markers entirely when the outer report card already handles them
+
+          // Horizontal Rule (CommonMark Specification: 3+ of -, *, _ with optional spaces, e.g. `---`, `- - -`, `***`, `* * *`, `___`, `_ _ _`)
+          if (/^(?:(?:\s*-\s*){3,}|(?:\s*\*\s*){3,}|(?:\s*_\s*){3,})$/.test(trimmed)) {
+            elements.push(
+              <hr
+                key={`hr-${i}`}
+                style={{
+                  border: 'none',
+                  borderTop: '1px solid var(--af-border)',
+                  margin: '10px 0',
+                  opacity: 0.8
+                }}
+              />
+            );
             i++;
-            while (i < lines.length && !lines[i].trim().match(/^===\s*END/i)) { i++; }
-            if (i < lines.length && lines[i].trim().match(/^===\s*END/i)) { i++; }
             continue;
           }
 
@@ -646,9 +926,19 @@ function MarkdownRenderer({ content, isReport }: { content: string; isReport?: b
             continue;
           }
 
-          // Horizontal rule
-          if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
-            elements.push(<hr key={`hr-${i}`} style={{ border: 'none', borderTop: '1px solid var(--af-border)', margin: '14px 0' }} />);
+          // Horizontal rule (CommonMark compliant: 3 or more -, *, _ with optional spaces)
+          if (/^(?:-{3,}|\*{3,}|_{3,}|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(trimmed)) {
+            elements.push(
+              <hr
+                key={`hr-${i}`}
+                style={{
+                  border: 'none',
+                  borderTop: '1px solid var(--af-border)',
+                  margin: '12px 0',
+                  width: '100%'
+                }}
+              />
+            );
             i++;
             continue;
           }
@@ -808,10 +1098,12 @@ function WriteFileViewer({ input, output }: { input?: string; output?: string })
   }
 
   const lines = fileContent.split('\n');
-  const hasManyLines = lines.length > 8;
-  const [expanded, setExpanded] = useState(false);
-  const displayContent = expanded ? fileContent : lines.slice(0, 8).join('\n');
-  const suffix = hasManyLines && !expanded ? `\n... (+${lines.length - 8} lines)` : '';
+  const lineCount = lines.length;
+
+  // Syntax highlight: lang từ filePath → highlight như CodeBlock; fallback plain nếu không hỗ trợ
+  const lang = langFromPath(filePath);
+  const supported = useMemo(() => isSupportedLang(lang), [lang]);
+  const tokens = useMemo(() => (supported ? highlight(fileContent, lang) : []), [supported, fileContent, lang]);
 
   return (
     <div
@@ -841,17 +1133,18 @@ function WriteFileViewer({ input, output }: { input?: string; output?: string })
         overflow: 'hidden',
         textOverflow: 'ellipsis'
       }}>
-        📝 write: {filePath || 'file'}
+        {extIcon(filePath)}
+        <span style={{ color: '#fbbf24' }}>write:</span> {filePath || 'file'}
       </div>
-      {/* Khung code nền tối, scroll tối đa 300px */}
+      {/* Khung code nền tối, scroll tối đa 600px */}
       <div style={{
-        maxHeight: 300,
+        maxHeight: 600,
         overflowY: 'auto',
         overflowX: 'auto',
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
-        background: '#0d1117'
+        background: 'var(--bg-inset)'
       }}>
         <pre style={{
           margin: 0,
@@ -861,11 +1154,26 @@ function WriteFileViewer({ input, output }: { input?: string; output?: string })
           lineHeight: 1.55,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
-          color: '#c9d1d9',
+          color: 'var(--text-primary)',
           maxWidth: '100%',
           boxSizing: 'border-box'
         }}>
-          {displayContent || '(empty)'}{suffix}
+          {supported ? (
+            <code>{tokens.map((t, i) => (
+              <span
+                key={i}
+                style={{
+                  color: t.color || undefined,
+                  fontStyle: t.italic ? 'italic' : undefined,
+                  fontWeight: t.bold ? 700 : undefined
+                }}
+              >
+                {t.text}
+              </span>
+            ))}</code>
+          ) : (
+            fileContent || '(empty)'
+          )}
         </pre>
       </div>
       {/* Footer: badge thành công + nút mở rộng/thu gọn */}
@@ -880,23 +1188,7 @@ function WriteFileViewer({ input, output }: { input?: string; output?: string })
         gap: 8
       }}>
         <span>✓ Ghi file thành công</span>
-        {hasManyLines && (
-          <button
-            onClick={() => setExpanded(e => !e)}
-            style={{
-              background: 'rgba(148,163,184,0.1)',
-              border: '1px solid rgba(148,163,184,0.25)',
-              color: '#cbd5e1',
-              borderRadius: 4,
-              padding: '1px 8px',
-              fontSize: 10,
-              cursor: 'pointer',
-              fontFamily: 'monospace'
-            }}
-          >
-            {expanded ? 'Collapse' : `Expand (${lines.length} dòng)`}
-          </button>
-        )}
+        <span style={{ color: '#94a3b8' }}>{lineCount} dòng</span>
       </div>
     </div>
   );
@@ -931,6 +1223,11 @@ function ReadFileViewer({ input, output }: { input?: string; output?: string }) 
   const nm = rawOut.match(/\((Showing lines[\s\S]*?)\)/i);
   const note = nm ? nm[1].trim() : '';
 
+  // Syntax highlight: lang từ filePath → highlight như CodeBlock; fallback plain nếu không hỗ trợ
+  const lang = langFromPath(filePath);
+  const supported = useMemo(() => isSupportedLang(lang), [lang]);
+  const tokens = useMemo(() => (supported ? highlight(code, lang) : []), [supported, code, lang]);
+
   return (
     <div
       className="af-toolblock"
@@ -956,17 +1253,17 @@ function ReadFileViewer({ input, output }: { input?: string; output?: string }) 
         overflow: 'hidden',
         textOverflow: 'ellipsis'
       }}>
-        📁 {filePath || 'file'}
+        {extIcon(filePath)} {filePath || 'file'}
       </div>
-      {/* Khung code nền tối, scroll tối đa 300px */}
+      {/* Khung code nền tối, scroll tối đa 600px */}
       <div style={{
-        maxHeight: 300,
+        maxHeight: 600,
         overflowY: 'auto',
         overflowX: 'auto',
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
-        background: '#0d1117'
+        background: 'var(--bg-inset)'
       }}>
         <pre style={{
           margin: 0,
@@ -976,11 +1273,26 @@ function ReadFileViewer({ input, output }: { input?: string; output?: string }) 
           lineHeight: 1.55,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
-          color: '#c9d1d9',
+          color: 'var(--text-primary)',
           maxWidth: '100%',
           boxSizing: 'border-box'
         }}>
-          {code || rawOut || '(empty)'}
+          {supported ? (
+            <code>{tokens.map((t, i) => (
+              <span
+                key={i}
+                style={{
+                  color: t.color || undefined,
+                  fontStyle: t.italic ? 'italic' : undefined,
+                  fontWeight: t.bold ? 700 : undefined
+                }}
+              >
+                {t.text}
+              </span>
+            ))}</code>
+          ) : (
+            code || rawOut || '(empty)'
+          )}
         </pre>
       </div>
       {/* Dòng tóm tắt chân khung */}
@@ -1032,10 +1344,10 @@ function BashCommandViewer({ input, output }: { input?: string; output?: string 
         }}>
           $ {command}
         </div>
-        {/* Output: giữ màu ANSI, scroll tối đa 280px */}
+        {/* Output: giữ màu ANSI, scroll tối đa 600px */}
         {outText && (
           <div style={{
-            maxHeight: 280,
+            maxHeight: 600,
             overflowY: 'auto',
             overflowX: 'auto',
             width: '100%',
@@ -1102,27 +1414,27 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
       }}>
         🔍 {String(tool).toUpperCase()}{pattern ? ` pattern: "${pattern}"` : ''}{sPath ? ` in ${sPath}` : ''}{include ? ` · ${include}` : ''}
       </div>
-      {/* Danh sách kết quả — nền tối GitHub, scroll 280px */}
+      {/* Danh sách kết quả — nền tối GitHub, scroll 600px */}
       <div style={{
-        maxHeight: 280,
+        maxHeight: 600,
         overflowY: 'auto',
         overflowX: 'auto',
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
-        background: '#0d1117'
+        background: 'var(--bg-inset)'
       }}>
         {rows.length === 0 ? (
-          <div style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: 12, color: '#8b949e' }}>(no results)</div>
+          <div style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: 12, color: '#6b7280' }}>(no results)</div>
         ) : rows.map((l, i) => {
           // grep -n style: "path/file.tsx:580:nội dung"
           const fm = l.match(/^([^\s:]+\.[A-Za-z0-9]{1,6}):(\d+):(.*)$/);
           if (fm) {
             return (
               <div key={i} style={{ display:'flex', gap:8, padding:'1px 10px', fontFamily:'monospace', fontSize:12, lineHeight:1.55 }}>
-                <span style={{ color:'#8b949e', flexShrink:0 }}>📄 {fm[1]}</span>
-                <span style={{ color:'#8b949e', flexShrink:0, minWidth:44, textAlign:'right' }}>{fm[2]}</span>
-                <span style={{ color:'#c9d1d9', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{fm[3]}</span>
+                <span style={{ color:'#6b7280', flexShrink:0 }}>📄 {fm[1]}</span>
+                <span style={{ color:'#6b7280', flexShrink:0, minWidth:44, textAlign:'right' }}>{fm[2]}</span>
+                <span style={{ color:'var(--text-primary)', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{fm[3]}</span>
               </div>
             );
           }
@@ -1131,15 +1443,15 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
           if (lm) {
             return (
               <div key={i} style={{ display:'flex', gap:8, padding:'1px 10px', fontFamily:'monospace', fontSize:12, lineHeight:1.55 }}>
-                <span style={{ color:'#8b949e', flexShrink:0, minWidth:36, textAlign:'right' }}>{lm[1]}</span>
-                <span style={{ color:'#c9d1d9', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{lm[2]}</span>
+                <span style={{ color:'#6b7280', flexShrink:0, minWidth:36, textAlign:'right' }}>{lm[1]}</span>
+                <span style={{ color:'var(--text-primary)', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{lm[2]}</span>
               </div>
             );
           }
           // đường dẫn file / thư mục trần
           const isFile = /\.[A-Za-z0-9]{1,6}$/.test(l.trim()) && !l.includes(' ');
           return (
-            <div key={i} style={{ padding:'1px 10px', fontFamily:'monospace', fontSize:12, lineHeight:1.55, color:'#c9d1d9' }}>
+            <div key={i} style={{ padding:'1px 10px', fontFamily:'monospace', fontSize:12, lineHeight:1.55, color:'var(--text-primary)' }}>
               {isFile ? `📄 ${l.trim()}` : (/\.[A-Za-z0-9]{1,6}/.test(l) || l.includes('/') || l.includes('\\') ? `📁 ${l.trim()}` : l)}
             </div>
           );
@@ -1330,8 +1642,8 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
       ? parsedInput.newString.split('\n')
       : [];
 
-  // Mặc định COLLAPSE (thu gọn 1 dòng) — user bấm Expand để xem chi tiết
-  const [expanded, setExpanded] = useState(false);
+  // Mặc định EXPAND (hiện full nội dung như hành vi cũ) — user bấm/click header để thu gọn
+  const [expanded, setExpanded] = useState(true);
 
   return (
     <div
@@ -1348,9 +1660,13 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
       overflowY: 'hidden',
       marginBottom: 4
     }}>
-      {/* Header: badge tên tool + nút thu gọn/mở rộng */}
+      {/* Header: badge tên tool + nút thu gọn/mở rộng. Click toàn header để toggle */}
       <div
         className="af-toolblock-head"
+        onClick={() => setExpanded(e => !e)}
+        role="button"
+        aria-expanded={expanded}
+        title={expanded ? 'Thu gọn' : 'Mở rộng'}
         style={{
         display: 'flex',
         alignItems: 'center',
@@ -1360,7 +1676,9 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
         background: 'var(--bg-panel)',
         borderBottom: expanded ? '1px solid var(--af-border)' : 'none',
         position: 'sticky',
-        top: 0
+        top: 0,
+        cursor: 'pointer',
+        userSelect: 'none'
       }}>
         <span style={{
           display: 'inline-flex',
@@ -1380,8 +1698,8 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
         }}>
           🔧 {String(tool || 'unknown')}
         </span>
-        <button
-          onClick={() => setExpanded(e => !e)}
+        <span
+          onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
           style={{
             background: 'rgba(148,163,184,0.1)',
             border: '1px solid rgba(148,163,184,0.25)',
@@ -1393,16 +1711,34 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
             fontFamily: 'monospace',
             flexShrink: 0
           }}
+          role="button"
+          aria-label={expanded ? 'Thu gọn' : 'Mở rộng'}
         >
           {expanded ? 'Collapse' : `Expand (${lineCount} dòng)`}
-        </button>
+        </span>
       </div>
+      {/* Khi collapsed: hiện 1 dòng gợi ý click để mở */}
+      {!expanded && (
+        <div
+          style={{
+            padding: '6px 10px',
+            color: 'var(--text-muted)',
+            fontSize: 11,
+            fontFamily: 'monospace',
+            opacity: 0.8
+          }}
+        >
+          <span onClick={(e) => { e.stopPropagation(); setExpanded(true); }} style={{ cursor: 'pointer', color: 'inherit' }}>
+            ▼ {String(tool || 'unknown')} — click để mở ({lineCount} dòng)
+          </span>
+        </div>
+      )}
       {/* Body: monospace 12px, scroll tối đa 280px khi mở */}
       {expanded && (
         <div
           className="af-toolblock-body"
           style={{
-          maxHeight: 280,
+          maxHeight: 600,
           overflowY: 'auto',
           overflowX: 'hidden',
           width: '100%',
@@ -1417,8 +1753,8 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
           color: 'var(--text-secondary)'
         }}>
           {isEditDiff && parsedInput && ((oldLines.length > 0 || newLines.length > 0) || typeof parsedInput.filePath === 'string') ? (
-            /* GIT-STYLE DIFF VIEW (context-aware) — chốt cứng maxHeight 300 + scroll */
-            <div style={{ maxHeight: 300, overflowY: 'auto', overflowX: 'auto', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
+            /* GIT-STYLE DIFF VIEW (context-aware) — chốt cứng maxHeight 600 + scroll */
+            <div style={{ maxHeight: 600, overflowY: 'auto', overflowX: 'auto', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
               {typeof parsedInput.filePath === 'string' && parsedInput.filePath !== '' && (
                 <div style={{ padding: '4px 8px 6px', color: '#94a3b8', fontFamily: 'monospace', fontSize: 12 }}>
                   📁 {parsedInput.filePath}
@@ -1455,73 +1791,104 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
 }
 
 // ============ THINKING BLOCK ============
-// Hiển thị suy luận nội tại của model: mặc định thu gọn, viền mảnh, nền mờ hơn bubble.
+// Hiển thị suy luận nội tại của model, kiểu coding-agent: block mềm, nền nhẹ, tối giản.
+// Mặc định thu gọn thành 1 dòng có nhãn rõ ràng + nút mở rộng. Chữ đọc rõ, tương phản tốt.
 function ThinkingBlock({ thinking }: { thinking: string }) {
   const [expanded, setExpanded] = useState(false);
 
+  // Preview: trích 1 dòng gọn đầu tiên, cắt tại 500 ký tự
+  const preview = thinking.split('\n').map(l => l.trim()).filter(Boolean)[0] || thinking.slice(0, 500);
+
   return (
     <div
-      className="af-toolblock"
+      className="af-thinking"
+      onClick={() => setExpanded(e => !e)}
       style={{
-      display: 'block',
-      width: '100%',
-      maxWidth: '100%',
-      boxSizing: 'border-box',
-      borderRadius: 10,
-      border: '1px solid var(--af-border)',
-      background: 'var(--bg-inset)',
-      overflowX: 'auto',
-      overflowY: 'hidden',
-      marginBottom: 4
-    }}>
-      {/* Header: 💭 Thinking + toggle */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 8,
-        padding: '5px 10px'
-      }}>
+        display: 'block',
+        width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        borderRadius: 8,
+        background: 'rgba(30,41,59,0.35)',
+        border: '1px solid rgba(99,102,241,0.25)',
+        overflow: 'hidden',
+        cursor: 'pointer',
+        marginBottom: 4
+      }}
+    >
+      {/* Header: nhãn rõ ràng + nút mở rộng — KHÔNG hiển thị dòng rỗng. Toggle do root container xử lý (click cả vùng). */}
+      <div
+        role="button"
+        aria-expanded={expanded}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          padding: '6px 10px',
+          cursor: 'pointer',
+          userSelect: 'none'
+        }}
+      >
         <span style={{
           fontSize: 11,
           fontWeight: 600,
-          color: '#94a3b8',
+          color: '#cbd5e1',
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 5
+          gap: 6,
+          letterSpacing: '0.02em'
         }}>
-          💭 Thinking
+          <span style={{ fontSize: 11, opacity: 0.8 }}>🧠</span>
+          {expanded ? 'Thinking' : 'Đã suy nghĩ'}
         </span>
-        <button
-          onClick={() => setExpanded(e => !e)}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-muted)',
-            padding: 0,
-            fontSize: 10,
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            flexShrink: 0
-          }}
-        >
-          {expanded ? '[▲] Collapse' : '[▼] Expand'}
-        </button>
+        <span style={{
+          fontSize: 10,
+          color: '#94a3b8',
+          fontFamily: 'monospace',
+          flexShrink: 0,
+          fontWeight: 500,
+          display: 'inline-flex',
+          alignItems: 'center'
+        }}>
+          {expanded ? '▲ Thu gọn' : '▼'}
+        </span>
       </div>
-      {/* Nội dung: xám #94a3b8, italic 12px, scroll tối đa 220px */}
+
+      {/* Collapsed: 1 dòng gọn, chữ rõ ràng — không hiển thị dòng rỗng/cục tròn xấu */}
+      {!expanded && preview && (
+        <div style={{
+          padding: '0 10px 7px',
+          fontSize: 11.5,
+          color: '#b6c2d1',
+          lineHeight: 1.5,
+          fontWeight: 450,
+          opacity: 1,
+          overflow: 'hidden',
+          maxHeight: 20,
+          whiteSpace: 'nowrap',
+          textOverflow: 'ellipsis',
+          cursor: 'pointer'
+        }}>
+          {preview}
+        </div>
+      )}
+
+      {/* Expanded: card nền mờ nhẹ kiểu coding-agent, scroll vừa phải (200-240px), chữ sáng rõ */}
       {expanded && (
         <div style={{
-          maxHeight: 220,
-          overflowY: 'auto',
           width: '100%',
-          padding: '8px 10px',
-          borderTop: '1px solid rgba(148,163,184,0.12)',
-          color: '#94a3b8',
-          fontSize: 12,
-          fontStyle: 'italic',
-          lineHeight: 1.55,
+          padding: '9px 12px',
+          borderTop: '1px solid rgba(148,163,184,0.14)',
+          background: 'rgba(15,23,42,0.75)',
+          color: '#d7dee9',
+          fontSize: 12.5,
+          fontWeight: 420,
+          lineHeight: 1.7,
           whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word'
+          wordBreak: 'break-word',
+          maxHeight: 600,
+          overflowY: 'auto'
         }}>
           {thinking}
         </div>
@@ -1586,6 +1953,11 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   const isStopUser = msg.msgType === 'stop_user';
   const isStopOrchestrator = msg.msgType === 'stop_orchestrator';
   const isStopError = msg.msgType === 'stop_error';
+  const isOrchestratorPlanning = isOrchestrator && /(?:\[TALK\]|\[SPAWN\]|^\[TASK\]|^\[RESEARCH\]|^\[VERIFICATION\])/i.test(msg.content || '');
+  const isOrchestratorInternal = msg.msgType === 'orchestrator_internal';
+  // Lệnh giao task của Orchestrator (spawn/talk do server tạo): render thành CỤC RIÊNG distinct,
+  // kèm receiver là agent. KHÔNG lẫn vào bubble chat thường.
+  const isOrchestratorTask = isOrchestrator && msg.msgType === 'talk' && msg.to && msg.to !== 'user' && msg.to !== 'broadcast';
 
   let sender = msg.from;
   let senderColor = '#38bdf8';
@@ -1623,7 +1995,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     senderColor = '#34d399';
   }
 
-  // Parse and strip internal prompt wrappers ([TEAM]...[/TEAM], [TASK], === INCOMING MESSAGE ===)
+  // Parse and strip internal prompt wrappers ([TEAM]...[/TEAM], [TASK], === INCOMING MESSAGE ===, === SYSTEM REMINDER ===, etc.)
   let rawContent: string = msg.content || '';
   if (rawContent.includes('=== INCOMING MESSAGE ===') && rawContent.includes('=== MESSAGE ===')) {
     const msgIdx = rawContent.indexOf('=== MESSAGE ===');
@@ -1631,15 +2003,38 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     const remIdx = inner.indexOf('=== SYSTEM REMINDER ===');
     if (remIdx !== -1) inner = inner.substring(0, remIdx);
     rawContent = inner.trim();
-  } else if (rawContent.includes('[TEAM]') && rawContent.includes('[/TEAM]')) {
-    rawContent = rawContent.replace(/\[TEAM\][\s\S]*?\[\/TEAM\]/g, '').replace(/\[TASK\][^\n]*\n?/g, '').trim();
+  }
+  
+  if (rawContent.includes('[TEAM]') && rawContent.includes('[/TEAM]')) {
+    rawContent = rawContent.replace(/\[TEAM\][\s\S]*?\[\/TEAM\]/g, '').trim();
+  }
+  rawContent = rawContent.replace(/\[TASK\][^\n]*\n?/g, '').trim();
+  if (rawContent.includes('=== SYSTEM REMINDER ===')) {
+    const sRemIdx = rawContent.indexOf('=== SYSTEM REMINDER ===');
+    rawContent = rawContent.substring(0, sRemIdx).trim();
+  }
+  if (rawContent.includes('=== INCOMING MESSAGE ===')) {
+    rawContent = rawContent.replace(/=== INCOMING MESSAGE ===[\s\S]*?=== MESSAGE ===/g, '').trim();
   }
 
-  // Parse [TO: xxx] prefix
-  const toMatch = rawContent.match(/^\s*\[TO:\s*([^\]]+)\]\s*/i);
-  const toTag = toMatch ? toMatch[1].trim() : null;
-  let body = toMatch ? rawContent.slice(toMatch[0].length) : rawContent;
+  // Parse [TO: xxx] prefix or <talk target="..."> prefix
+  let toTag: string | null = null;
+  const toMatch = rawContent.match(/^\s*\[TO:\s*([^\]]+)\]\s*/iu);
+  if (toMatch) {
+    toTag = toMatch[1].trim();
+  } else {
+    const xmlTalkMatch = rawContent.match(/^\s*<talk\s+[^>]*\btarget\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
+    if (xmlTalkMatch) {
+      toTag = (xmlTalkMatch[1] || xmlTalkMatch[2] || xmlTalkMatch[3] || '').trim();
+    }
+  }
+  let body = rawContent
+    .replace(/^\s*(?:\[FROM:\s*[^\]]+\]\s*)?\[TO:\s*[^\]]+\]\s*/iu, '')
+    .replace(/^\s*<talk\b[^>]*>\s*/iu, '');
   body = stripTalkTags(body);
+  if (isOrchestratorInternal && !msg.showOnUI) {
+    body = '_(Internal orchestrator planning hidden)_';
+  }
   const effectiveTo = msg.to && msg.to !== 'user' ? msg.to : toTag;
 
   // Resolve target display
@@ -1668,6 +2063,12 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     bubbleBorder = '1px solid var(--af-border)';
     textColor = 'var(--text-secondary)';
     bubbleShadow = 'none';
+  } else if (isOrchestratorTask) {
+    // Cục riêng cho lệnh giao task của Orchestrator — nền/viền chàm accent, dễ nhận diện
+    bubbleBg = 'rgba(99, 102, 241, 0.07)';
+    bubbleBorder = '1px solid rgba(99, 102, 241, 0.45)';
+    textColor = 'var(--text-primary)';
+    bubbleShadow = '0 2px 12px rgba(99, 102, 241, 0.12)';
   } else if (isUser) {
     bubbleBg = 'rgba(59, 130, 246, 0.08)';
     bubbleBorder = '1px solid rgba(59, 130, 246, 0.2)';
@@ -1691,11 +2092,29 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   const formattedTime = formatTimestamp(msg.timestamp);
   const fullDateTime = formatFullDate(msg.timestamp);
 
-  // Collapsible structured reports — only for worker messages, NOT orchestrator/user
-  const isReport = !isOrchestrator && !isUser && (body.includes('=== TASK REPORT ===') || body.includes('=== ERROR REPORT ===') || body.includes('=== AGENT MESSAGE ==='));
+  // Split conversation text and structured report card
+  const splitResult = useMemo(() => {
+    return isUser ? { conversationText: body, hasReport: false } : splitReportAndConversation(body);
+  }, [body, isUser]);
+
+  const { conversationText, hasReport, reportTitle, reportContent } = splitResult;
 
   // Tin có toolCalls (hoặc log opencode) — các khối tool/thinking render ĐỘC LẬP ngoài bubble
   const hasToolBlocks = showToolBlocks && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0;
+  // Option C: server gửi msg.parts (text + tool xen kẽ theo đúng thứ tự emit). Nếu có → render interleaved,
+  // bỏ qua Khối 2 (toolCalls block riêng) + Khối 3 (bubble text) để không in trùng.
+  const hasParts = Array.isArray((msg as any).parts) && (msg as any).parts.length > 0;
+  const isRawCommandOutput = isOpenCode && /(?:<talk\s+|<spawn\s+|\[TALK\s+|\[SPAWN\s+|===\s*(?:TASK|ERROR|VERIFICATION)\s+REPORT\s*===)/i.test(msg.content || '');
+  // Guard bubble rỗng: message chỉ có thinking/toolCall (content rỗng) KHÔNG tạo bubble text rỗng (cục tròn)
+  const hasBubbleContent = !!body && String(body).trim().length > 0;
+
+  if (isOrchestratorInternal && msg.from === 'orchestrator' && !msg.showOnUI) {
+    return null;
+  }
+
+  if (isOpenCode && isRawCommandOutput && !hasToolBlocks && (!msg.thinking || !String(msg.thinking).trim())) {
+    return null;
+  }
 
   return (
     <div
@@ -1703,7 +2122,9 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
       style={{
         display: 'flex',
         flexDirection: 'column',
-        alignItems: isUser ? 'flex-end' : 'flex-start'
+        alignItems: isUser ? 'flex-end' : 'flex-start',
+        minWidth: 0,
+        overflowWrap: 'anywhere'
       }}
     >
       {/* Sender Header */}
@@ -1767,7 +2188,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
-          maxWidth: isMobile ? '94%' : '85%',
+          maxWidth: isMobile ? '96%' : '94%',
           alignSelf: isUser ? 'flex-end' : 'flex-start',
           marginBottom: 4
         }}>
@@ -1775,8 +2196,8 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         </div>
       )}
 
-      {/* Khối 2: ToolCallBlocks — các hộp công cụ độc lập, NGOÀI bubble */}
-      {showToolBlocks && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0 && (
+      {/* Khối 2: ToolCallBlocks — các hộp công cụ độc lập, NGOÀI bubble (bỏ qua khi đã render interleaved parts) */}
+      {!hasParts && showToolBlocks && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0 && (
         <div style={{
           display: 'flex',
           flexDirection: 'column',
@@ -1801,67 +2222,187 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         </div>
       )}
 
-      {/* Khối 3: Bubble text — dạng flat stream chuyên nghiệp */}
-      <div
-        className={`af-bubble${isUser ? ' af-bubble-user' : ''}`}
-        style={{
-        background: isUser ? bubbleBg : 'transparent',
-        color: textColor,
-        padding: isUser ? '10px 14px' : '10px 0',
-        borderRadius: 12,
-        width: 'fit-content',
-        maxWidth: isMobile ? '94%' : '88%',
-        boxSizing: 'border-box',
-        fontSize: isOpenCode ? 12 : 13,
-        lineHeight: 1.6,
-        whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
-        fontFamily: isOpenCode ? 'monospace' : 'inherit',
-        border: isUser ? bubbleBorder : 'none',
-        boxShadow: isUser ? bubbleShadow : 'none',
-        wordBreak: 'break-word',
-        position: 'relative'
-      }}>
-        {isReport && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 8,
-            paddingBottom: 6,
-            borderBottom: '1px solid var(--af-border)'
-          }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--report-label)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              📋 Structured Task Report
-            </span>
-            <button
-              onClick={() => onToggleReport(msg.id)}
-              style={{
-                background: 'var(--bg-inset)',
-                border: '1px solid var(--af-border)',
-                color: 'var(--text-secondary)',
-                borderRadius: 4,
-                padding: '2px 8px',
-                fontSize: 10,
-                cursor: 'pointer'
-              }}
-            >
-              {isCollapsed ? 'Show Full Report' : 'Collapse'}
-            </button>
-          </div>
-        )}
+      {/* Khối 2.5: Option C — render parts xen kẽ text + tool theo ĐÚNG thứ tự opencode emit.
+          Server gửi msg.parts = [ {type:'text',content}, {type:'tool',tool,input,output}, ... ].
+          Text segment render như bubble text; tool segment render ToolCallBlock. */}
+      {hasParts && (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          maxWidth: isMobile ? '96%' : '94%',
+          alignSelf: isUser ? 'flex-end' : 'flex-start',
+          gap: 4
+        }}>
+          {((msg as any).parts as any[]).map((part, i) => {
+            if (!part) return null;
+            if (part.type === 'tool') {
+              const safeTool = {
+                tool: typeof part.tool === 'string' && part.tool ? part.tool : 'tool',
+                input: part.input === undefined || part.input === null ? undefined : String(part.input),
+                output: part.output === undefined || part.output === null ? undefined : String(part.output)
+              };
+              return (
+                <div key={'pt-' + i} style={{ width: '100%', maxWidth: isMobile ? '94%' : '88%' }}>
+                  <ToolBlockSafe>
+                    <ToolCallBlock tool={safeTool.tool} input={safeTool.input} output={safeTool.output} />
+                  </ToolBlockSafe>
+                </div>
+              );
+            }
+            const segText = String(part.content || '');
+            if (!segText) return null;
+            return (
+              <div
+                key={'pt-' + i}
+                className={`af-bubble${isUser ? ' af-bubble-user' : ''}`}
+                style={{
+                background: (isUser || isOrchestratorTask) ? bubbleBg : 'transparent',
+                color: textColor,
+                padding: (isUser || isOrchestratorTask) ? '10px 14px' : '10px 0',
+                borderRadius: 12,
+                width: 'fit-content',
+                maxWidth: '100%',
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+                boxSizing: 'border-box',
+                fontSize: isOpenCode ? 12 : 13,
+                lineHeight: 1.6,
+                whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
+                fontFamily: isOpenCode ? 'monospace' : 'inherit',
+                border: (isUser || isOrchestratorTask) ? bubbleBorder : 'none',
+                boxShadow: (isUser || isOrchestratorTask) ? bubbleShadow : 'none',
+                wordBreak: 'break-word',
+                position: 'relative'
+              }}>
+                {isOpenCode ? (
+                  <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {segText}
+                  </div>
+                ) : (
+                  <MarkdownRenderer content={segText} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-        {isReport && isCollapsed ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, fontStyle: 'italic' }}>
-            Report content collapsed. Click "Show Full Report" above to expand.
-          </div>
-        ) : isOpenCode ? (
-          <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {body}
-          </div>
-        ) : (
-          <MarkdownRenderer content={body} isReport={isReport} />
-        )}
-      </div>
+      {/* Khối 3: Bubble text — dạng flat stream chuyên nghiệp. Chỉ render khi có nội dung text thật */}
+      {!hasParts && (hasBubbleContent && (!isOpenCode || !isRawCommandOutput || (!hasToolBlocks && (!msg.thinking || !String(msg.thinking).trim())))) && (
+        <div
+          className={`af-bubble${isUser ? ' af-bubble-user' : ''}`}
+          style={{
+          background: (isUser || isOrchestratorTask) ? bubbleBg : 'transparent',
+          color: textColor,
+          padding: (isUser || isOrchestratorTask) ? '10px 14px' : '10px 0',
+          borderRadius: 12,
+          width: 'fit-content',
+          maxWidth: isMobile ? '94%' : '88%',
+          minWidth: 0,
+          overflowWrap: 'anywhere',
+          boxSizing: 'border-box',
+          fontSize: isOpenCode ? 12 : 13,
+          lineHeight: 1.6,
+          whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
+          fontFamily: isOpenCode ? 'monospace' : 'inherit',
+          border: (isUser || isOrchestratorTask) ? bubbleBorder : 'none',
+          boxShadow: (isUser || isOrchestratorTask) ? bubbleShadow : 'none',
+          wordBreak: 'break-word',
+          position: 'relative'
+        }}>
+          {isOrchestratorTask ? (
+            <>
+              <div style={{
+                display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+                fontSize: 11, fontWeight: 700,
+                color: '#a5b4fc', marginBottom: 6,
+                letterSpacing: '-0.01em'
+              }}>
+                <span style={{ flexShrink: 0 }}>📋</span>
+                <span
+                  style={{
+                    background: 'rgba(99, 102, 241, 0.16)',
+                    color: '#c7d2fe',
+                    borderRadius: 5,
+                    padding: '2px 7px',
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    letterSpacing: '0.02em',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  Giao việc
+                </span>
+                <span style={{ color: '#8b9bb4', fontWeight: 600 }}>Orchestrator</span>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    color: '#818cf8',
+                    fontWeight: 800,
+                    fontSize: 14,
+                    lineHeight: 1,
+                    flexShrink: 0
+                  }}
+                  aria-hidden="true"
+                >
+                  ➜
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span
+                    style={{
+                      fontSize: 9.5,
+                      color: '#8b9bb4',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.03em'
+                    }}
+                  >
+                    Gửi đến
+                  </span>
+                  <span
+                    style={{
+                      background: 'rgba(99, 102, 241, 0.28)',
+                      color: '#e0e7ff',
+                      borderRadius: 5,
+                      padding: '2px 8px',
+                      fontSize: 10.5,
+                      fontWeight: 800,
+                      border: '1px solid rgba(129, 140, 248, 0.5)',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {displayTo || 'Agent'}
+                  </span>
+                </span>
+              </div>
+              <MarkdownRenderer content={conversationText || body} />
+            </>
+          ) : isOpenCode ? (
+            <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {body}
+            </div>
+          ) : (
+            <>
+              {conversationText ? (
+                <MarkdownRenderer content={conversationText} />
+              ) : null}
+              {hasReport && reportContent ? (
+                <div style={{ marginTop: conversationText ? 10 : 0 }}>
+                  <ReportCard
+                    title={reportTitle || 'Structured Task Report'}
+                    content={reportContent}
+                  />
+                </div>
+              ) : null}
+              {!conversationText && !hasReport && body ? (
+                <MarkdownRenderer content={body} />
+              ) : null}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 });
@@ -1914,6 +2455,7 @@ export function ChatPanel({
   showToolBlocks = true
 }: Props) {
   const [input, setInput] = useState('');
+  const isComposingRef = useRef(false);
   const [collapsedReports, setCollapsedReports] = useState<Record<string, boolean>>({});
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -1987,33 +2529,56 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [title]);
 
+  // Sticky scroll: CHỈ auto-scroll xuống đáy khi user đang Ở GẦN ĐÁY (trong AUTO_SCROLL_THRESHOLD).
+  // Dùng "signature" của tin cuối (length + id + content length) — ổn định khi App re-render vô cớ
+  // (SSE tick/status), nhưng đổi khi CÓ tin mới HOẶC streaming content → không bỏ lỡ theo dõi streaming.
+  const lastMsg =
+    displayMessages.length > 0 ? (displayMessages[displayMessages.length - 1] as any) : undefined;
+  const lastMsgSig = lastMsg
+    ? `${displayMessages.length}:${String(lastMsg?.id ?? '')}:${String(lastMsg?.content ?? '').length}`
+    : '';
+  const prevSigRef = useRef(lastMsgSig);
+
+  // Khi có thay đổi tin nhắn thật (thêm mới / streaming): nếu user ở gần đáy → kéo xuống theo,
+  // ngược lại (user đang đọc tin cũ) GIỮ NGUYÊN vị trí.
   useEffect(() => {
+    const sig = lastMsgSig;
+    const changed = sig !== prevSigRef.current;
+    prevSigRef.current = sig;
+
     if (displayMessages.length === 0) {
+      // Không có tin → chờ tin tiếp, đánh dấu để scroll đáy ở lần tin đầu của phiên
       initialLoadRef.current = true;
+      return;
+    }
+
+    const el = scrollRef.current;
+    if (!el) return;
+
+    if (changed && isNearBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      setShowScrollBtn(false);
+    }
+  }, [lastMsgSig, displayMessages.length]);
+
+  // Lần mount đầu tiên (hoặc phiên mới sau khi display rỗng) → scroll đáy một lần, không smooth giật.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (initialLoadRef.current && displayMessages.length > 0) {
+      el.scrollTop = el.scrollHeight;
+      initialLoadRef.current = false;
+      isNearBottomRef.current = true;
+      setShowScrollBtn(false);
     }
   }, [displayMessages.length]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-
-    if (initialLoadRef.current) {
-      el.scrollTop = el.scrollHeight;
-      initialLoadRef.current = false;
-      isNearBottomRef.current = true;
-      setShowScrollBtn(false);
-    } else if (isNearBottomRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-      setShowScrollBtn(false);
-    }
-  }, [messages, allMessages]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     setShowScrollBtn(distanceFromBottom > AUTO_SCROLL_THRESHOLD);
-  }, [messages, allMessages, visibleCount]);
+  }, [lastMsgSig, visibleCount]);
 
   // Sau khi prepend tin nhắn cũ (load more), giữ nguyên vị trí cuộn của người dùng
   useLayoutEffect(() => {
@@ -2025,14 +2590,21 @@ export function ChatPanel({
     loadingOlderRef.current = false;
   }, [visibleCount, totalLen]);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-    onSend(input.trim());
-    setInput('');
-  };
+const handleSend = () => {
+     console.log('handleSend raw input:', input);
+     const trimmed = input.trim();
+     console.log('handleSend trimmed:', trimmed);
+     if (!trimmed) return;
+     onSend(trimmed);
+     setInput('');
+   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Bỏ qua Enter khi đang composition IME (gõ tiếng Việt/Unikey): nếu xử lý send
+    // ngay lúc composition chưa hoàn tất, React controlled value bị cắt mất ký tự
+    // đang pending của bộ gõ (ví dụ mất ký tự đầu "Ý" trong "Ý tôi là...").
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (isComposingRef.current || e.nativeEvent.isComposing) return;
       e.preventDefault();
       handleSend();
     } else if (e.key === 'Escape') {
@@ -2234,7 +2806,7 @@ export function ChatPanel({
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} onScroll={handleScroll} className="af-chat-scroll" style={{ flex: 1, overflow: 'auto', padding: isMobile ? '14px 10px' : '24px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div ref={scrollRef} onScroll={handleScroll} className="af-chat-scroll" style={{ flex: 1, overflow: 'auto', minWidth: 0, padding: isMobile ? '14px 10px' : '24px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {displayMessages.length === 0 ? (
           <div style={{
             textAlign: 'center',
@@ -2370,37 +2942,6 @@ export function ChatPanel({
       </div>
 
       {/* Input */}
-      {/* QUEUED MESSAGES BAR — hien ngay tren khung typing khi dang busy */}
-      {queuedMessages.length > 0 && (
-        <div className="af-queue-bar" style={{
-          margin: '0 12px 10px',
-          padding: '8px 12px',
-          borderRadius: 10,
-          border: '1px dashed rgba(56,189,248,0.4)',
-          background: 'rgba(56,189,248,0.08)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontSize: 12,
-          color: '#38bdf8',
-          fontFamily: 'monospace',
-          maxHeight: 56,
-          overflow: 'hidden',
-          animation: 'af-queue-slide 0.25s ease',
-          transition: 'all 0.25s ease'
-        }}>
-          <span style={{ flexShrink: 0 }}>⏳ Queued ({queuedMessages.length})</span>
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-            {queuedMessages.length === 1
-              ? queuedMessages[0].content.slice(0, 80)
-              : `${queuedMessages[0].content.slice(0, 50)}… +${queuedMessages.length - 1} more`}
-          </span>
-          <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>→ sẽ gửi khi rảnh</span>
-          {onFlushQueue && (
-            <button onClick={onFlushQueue} title="Gửi hết hàng đợi ngay" style={{ background: 'rgba(56,189,248,0.15)', border: '1px solid rgba(56,189,248,0.4)', color: '#38bdf8', borderRadius: 6, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: 'monospace', flexShrink: 0 }}>Gửi hết</button>
-          )}
-        </div>
-      )}
       <div className="af-chat-input" style={{
         padding: isMobile ? '10px 12px' : '16px 20px',
         paddingBottom: isMobile ? 'calc(10px + env(safe-area-inset-bottom))' : 16,
@@ -2411,6 +2952,8 @@ export function ChatPanel({
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onCompositionEnd={() => { isComposingRef.current = false; }}
             onKeyDown={handleKeyDown}
             placeholder={loading ? "Type to queue next message... (Enter to send)" : "Type your message or instructions... (Enter to send, Shift+Enter for newline)"}
             style={{

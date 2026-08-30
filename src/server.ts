@@ -95,35 +95,42 @@ You are the Orchestrator. Your role: analyze tasks, decompose into subtasks, spa
 - idea: generates creative ideas, features, solutions, and improvements (brainstorming)
 
 === COMMANDS YOU CAN USE ===
-You MUST use these exact tags in your response:
+Hệ thống hỗ trợ song song 2 định dạng lệnh (Dual-Syntax). Khuyến nghị ưu tiên cú pháp XML tags <...>:
 
-1. SPAWN — Create a new agent:
-   [SPAWN role=<role> name=<name> task=<specific task description>]
+CRITICAL SYNTAX RULE: Khi phát lệnh điều phối (<spawn>, <talk>, <stop>, <resume>), BẮT BUỘC viết thẻ XML trực tiếp ngoài văn bản (Bare XML Tags). TUYỆT ĐỐI KHÔNG bọc thẻ lệnh thực thi bên trong fenced code blocks hoặc dấu backtick, vì parser sẽ coi đó là code minh họa và bỏ qua không thực thi.
 
-2. TALK — Send message to an existing agent (and optionally update its assigned task):
-   [TALK target=<name/id> task=<specific new task description (optional)> message=<your message>]
-   hoặc
-   [TALK target=<name/id> message=<your message>]
+1. SPAWN — Khởi tạo agent mới:
+   <spawn role="<role>" name="<name>" task="<specific task description>" />
+   (Hoặc: [SPAWN role=<role> name=<name> task=<specific task description>])
 
-3. STOP — Stop a stuck agent:
-   [STOP AGENT target-id=<agent-id>]
+2. TALK — Gửi tin nhắn tới agent đang tồn tại (và cập nhật task mới nếu có):
+   <talk target="<name/id>" task="<specific new task description (optional)>">message</talk>
+   hoặc <talk target="<name/id>">message</talk>
+   (Hoặc: [TALK target=<name/id> task=<specific new task description (optional)> message=<your message>])
 
-4. RESUME — Resume a stopped agent:
-   [RESUME AGENT target-id=<agent-id>]
+3. STOP — Dừng agent bị kẹt:
+   <stop target="<agent-id>" />
+   (Hoặc: [STOP AGENT target-id=<agent-id>])
 
-5. CREATE ROLE — Create a new custom agent role with a .md prompt file:
-   [CREATE ROLE name=<role-name> description=<what this role does> capabilities=<cap1,cap2,cap3> rules=<rule1|rule2|rule3>]
-   After creating, you can [SPAWN role=<role-name> ...] to use it.
+4. RESUME — Phục hồi agent đã dừng:
+   <resume target="<agent-id>" />
+   (Hoặc: [RESUME AGENT target-id=<agent-id>])
+
+5. CREATE ROLE — Tạo role agent tùy biến kèm prompt file:
+   <create_role name="<role-name>" description="<what this role does>" capabilities="<cap1,cap2,cap3>" rules="<rule1|rule2|rule3>" />
+   (Hoặc: [CREATE ROLE name=<role-name> description=<what this role does> capabilities=<cap1,cap2,cap3> rules=<rule1|rule2|rule3>])
+   After creating, you can <spawn role="<role-name>" ... /> to use it.
    Rules are separated by | (pipe). Capabilities are separated by , (comma).
 
 === RULES ===
-1. ALWAYS decompose user tasks into specific subtasks before spawning
-2. Each SPAWN must have: role, name (short lowercase), task (specific with file paths)
+1. CRITICAL SYNTAX RULE: Khi phát lệnh điều phối (<spawn>, <talk>, <stop>, <resume>), BẮT BUỘC viết thẻ XML trực tiếp ngoài văn bản (Bare XML Tags). TUYỆT ĐỐI KHÔNG bọc thẻ lệnh thực thi bên trong fenced code blocks hoặc dấu backtick, vì parser sẽ coi đó là code minh họa và bỏ qua không thực thi.
+2. ALWAYS decompose user tasks into specific subtasks before spawning
+3. Each SPAWN must have: role, name (short lowercase), task (specific with file paths)
 3. PARALLEL DECOMPOSITION & NON-CONFLICTING LOGIC MANDATE: Mọi bài toán/nhiệm vụ có các nhánh logic độc lập (không chỉ khác tệp, mà kể cả khi chung một tệp hoặc cùng một tầng nhưng xử lý các hàm khác nhau, endpoint khác nhau, UI component khác nhau hoặc luồng logic hoàn toàn không phụ thuộc lẫn nhau) BẮT BUỘC PHẢI PHÂN RÃ VÀ SPAWN/DISPATCH ĐỒNG LOẠT SONG SONG NGAY TỪ ĐẦU cho nhiều Coder/Specialist agents cùng làm. TUYỆT ĐỐI KHÔNG làm tuần tự khi các luồng logic không va chạm.
 4. REUSE ONLY IF IDLE: If you SPAWN a name that already exists, reuse it ONLY when that agent is currently 'idle'. If it is 'working', you MUST spawn a new name or choose another idle agent. Do not assign new work to a working agent.
 5. Orchestrator TUYỆT ĐỐI KHÔNG được xóa agent. Khi một agent không còn cần thiết, bị lỗi hoặc kẹt, Orchestrator chỉ được [STOP] agent và báo cáo/đề xuất User xóa agent trên giao diện.
 6. Instance limit rules by role: coder role is limited to a maximum of 4 active instances. All other roles (researcher, verifier, tester, reviewer, docs, planner, debugger, searcher, idea) are limited to a maximum of 2 active instances. Custom roles default to a maximum of 2 active instances.
-7. IDLE-FIRST dispatch: Before any [TALK]/[SPAWN], check the [TEAM] table and ONLY select agents whose status is 'idle'. If no idle agent exists for the required role, spawn a new instance. When the system sends '[Role Limit]', immediately switch to [TALK] with an available idle agent instead of spawning.
+7. IDLE-FIRST dispatch: Before any <talk>/<spawn> (or [TALK]/[SPAWN]), check the [TEAM] table and ONLY select agents whose status is 'idle'. If no idle agent exists for the required role, spawn a new instance. When the system sends '[Role Limit]', immediately switch to <talk target="..." /> (or [TALK]) with an available idle agent instead of spawning.
 8. RESEARCH FIRST RULE: Before implementing any changes, fixing bugs, or writing code, you MUST first research the codebase, read the relevant files, check documentation, or search online resources to gather context and understand the implementation details.
 9. Monitor progress — if an agent works > 3 minutes, use TALK to ask for status
 10. If an agent is stuck, STOP it then RESUME with clearer instructions
@@ -131,12 +138,13 @@ You MUST use these exact tags in your response:
 12. NEVER do the coding work yourself — delegate to specialist agents
 13. If existing roles don't fit, CREATE ROLE first, then SPAWN with it
 14. Use existing roles first — only CREATE ROLE when necessary
+15. PHÂN QUYỀN THỰC THI TÀI LIỆU MARKDOWN: Main Orchestrator có toàn quyền ghi chép, chỉnh sửa, tạo mới và cập nhật trực tiếp toàn bộ các tài liệu markdown (*.md), bao gồm CHANGELOG.md, README.md, tài liệu kiến trúc và hướng dẫn kỹ thuật mà không bị giới hạn quyền. Orchestrator có thể tự mình cập nhật tài liệu hoặc giao việc cho worker khi cần.
 
 === EXAMPLES ===
 User: "Build a Python calculator with tests"
 You respond with:
-[SPAWN role=coder name=calc task=Create calculator.py with add(a,b), subtract(a,b), multiply(a,b), divide(a,b) functions. Add type validation and division by zero handling.]
-[SPAWN role=tester name=test task=Create test_calculator.py with unit tests for all calculator functions. Test edge cases: type errors, division by zero, negative numbers.]
+<spawn role="coder" name="calc" task="Create calculator.py with add(a,b), subtract(a,b), multiply(a,b), divide(a,b) functions. Add type validation and division by zero handling." />
+<spawn role="tester" name="test" task="Create test_calculator.py with unit tests for all calculator functions. Test edge cases: type errors, division by zero, negative numbers." />
 
 Example multi-coder parallel decomposition:
 TASK: Build user auth with tests and docs
@@ -161,16 +169,17 @@ Summarize all reports to the user in a clear, concise way.`;
 
 const ORCH_REMINDER = `\n\n=== SYSTEM REMINDER ===
 You are the Orchestrator. You MUST communicate with workers using:
-[SPAWN role=<role> name=<name> task=<task>]
-[TALK agent-id=<agent-id> message=<message>]
-[STOP AGENT target-id=<agent-id>]
-[RESUME AGENT target-id=<agent-id>]
+<spawn role="<role>" name="<name>" task="<task>" />
+<talk target="<name/id>" task="<task>">your message</talk>
+<stop target="<target-id>" />
+<resume target="<target-id>" />
+(Classic bracket syntax [SPAWN ...], [TALK ...] is also supported).
 
-Always decompose tasks before spawning. Do NOT do the work yourself. Orchestrator CANNOT delete agents; use [STOP AGENT] and ask the user to delete if necessary. Respond to the user in a clear, concise way.`;
+Always decompose tasks before spawning. Do NOT do the work yourself. Orchestrator CANNOT delete agents; use <stop target="..." /> and ask the user to delete if necessary. Respond to the user in a clear, concise way.`;
 
 const WORKER_REMINDER = `\n\n=== SYSTEM REMINDER ===
-Use [TO: <target-id>] <message> for communications.
-Finish with [TO: orchestrator] Task complete. === TASK REPORT ===`;
+Use <talk target="<target-id>">your message</talk> or [TO: <target-id>] <message> for communications.
+Finish with <talk target="orchestrator">Task complete. === TASK REPORT === ...</talk> (or [TO: orchestrator] Task complete. === TASK REPORT ===)`;
 
 function buildWorkerPrompt(role?: string, agent?: Agent, isInitial?: boolean): string {
   // Kiến trúc SSoT: Toàn bộ Base Rules, Role Rules và Formats đã được đồng bộ sẵn vào .opencode/agents/<role>.md.
@@ -242,14 +251,19 @@ description: ${ROLE_DESCRIPTIONS.orchestrator}
 mode: primary
 permission:
   "*": deny
+  read:
+    "*": allow
   glob: allow
+  grep: allow
   webfetch: allow
   websearch: allow
   edit:
     "*": deny
     "*.md": allow
-  read:
-    "*": allow
+  write:
+    "*": deny
+    "*.md": allow
+  task: deny
 ---
 
 ${orchPrompt}
@@ -307,10 +321,15 @@ interface ChatMsg {
   id: string; from: string; to: string; content: string;
   timestamp: number; agentName?: string; agentRole?: string;
   msgType?: string;
+  showOnUI?: boolean;
   // Dữ liệu toolcall cấu trúc lấy từ event gốc của opencode (nguồn cho UI toolcall)
   toolCalls?: Array<{ tool: string; input?: string; output?: string }>;
   // Suy nghĩ nội bộ của model (reasoning/thinking) — tách khỏi content
   thinking?: string;
+  // Cho phép hiển thị thinking block (chỉ khi có explicit 'in' event)
+  allowThinking?: boolean;
+  // Option C: ordered parts (text + tool xen kẽ theo đúng thứ tự opencode emit)
+  parts?: Array<{ type: 'text' | 'tool'; content?: string; tool?: string; input?: any; output?: any }>;
 }
 
 const agents = new Map<string, Agent>();
@@ -324,11 +343,76 @@ const unreadForOrchestrator: ChatMsg[] = [];
 // Track message IDs sent to orchestrator batch to prevent duplicates
 const trackedMessageIds = new Set<string>();
 
+// ===== Dedup broadcast UI: chống nhân đôi bubble khi cùng nội dung xử lý 2 lần =====
+// Khóa dedup = content-based (from|to|msgType|chuẩn hoá whitespace content) trong cửa sổ TTL.
+// Trước đây khóa = msg.id (uuidv4 mới mỗi call) → dedup vô hiệu với bubble trùng từ 2 call riêng biệt.
+const BROADCAST_DEDUP_TTL_MS = 30000;
+const broadcastDedup = new Map<string, number>();
+function broadcastDedupKey(msg: ChatMsg): string {
+  const norm = String(msg.content || '').replace(/\s+/g, ' ').trim();
+  return `${msg.from || ''}|${msg.to || ''}|${msg.msgType || ''}|${norm}`;
+}
+function isBroadcastDuplicate(key: string): boolean {
+  if (!key) return false;
+  const now = Date.now();
+  const last = broadcastDedup.get(key);
+  if (last !== undefined && now - last < BROADCAST_DEDUP_TTL_MS) {
+    return true;
+  }
+  broadcastDedup.set(key, now);
+  // Dọn dẹp bounded: xóa các entry quá cũ để tránh memory leak
+  if (broadcastDedup.size > 3000) {
+    for (const [k, v] of broadcastDedup) {
+      if (now - v > BROADCAST_DEDUP_TTL_MS) broadcastDedup.delete(k);
+    }
+  }
+  return false;
+}
+
+// Per-agent thinking gate: cho phép broadcast realtime chat:thinking chỉ khi
+// agent đã nhận event 'in' (prompt input) → user chưa tắt thinking.
+// Set true khi 'in' event đến, reset ở turn mới (nếu cần).
+const agentThinkingAllowed = new Set<string>();
+
 // Prevent duplicate synthesis when multiple agents complete simultaneously
 const synthesisTriggered = new Set<string>();
 
+// ===== FIX DUP ORCHESTRATOR (Option A): Batch-level coordination =====
+// 2 path song song cùng broadcast orchestrator→user cho 1 lần agent hoàn thành:
+//   Path A processOrchestratorTriggerQueue (L2359) — per-report turn.
+//   Path B checkAndSynthesize (L1266) — summary tổng hợp khi TẤT CẢ spawnedByOrch idle.
+// Cả 2 dùng prompt khác nên content khác → dedup content-based KHÔNG bắt → 2 bubble main.
+// Giải pháp: khi checkAndSynthesize xác nhận 1 batch allDone (đang chờ synthesis 1.8s),
+// đánh dấu batchKey vào set này NGAY (trước khi trigger queue fire 1.5s).
+// processOrchestratorTriggerQueue kiểm tra set: nếu batch đang chờ synthesis → KHÔNG
+// broadcast bubble per-report (vẫn enqueue orchestrator để không mất điều phối).
+// Xóa khi synthesis chạy xong để agent cùng batch, turn mới vẫn broadcast bình thường.
+// In-memory chỉ (restart reset) → replay outbox không bị chặn nhầm.
+const synthesisPendingBatches = new Set<string>();
+
+function markBatchAwaitingSynthesis(agentIds: string[]): void {
+  if (!agentIds.length) return;
+  synthesisPendingBatches.add(agentIds.slice().sort().join(','));
+  // Bounded: giữ tối đa 40 batch; entry tự xóa khi synthesis chạy xong.
+  if (synthesisPendingBatches.size > 40) {
+    const first = synthesisPendingBatches.values().next().value;
+    if (first) synthesisPendingBatches.delete(first);
+  }
+}
+
+// Trả về true nếu MỌI agent trong agentIds đều thuộc ít nhất 1 batch đang chờ synthesis.
+// Dùng cho trigger queue: nếu toàn bộ report batch này sẽ bị synthesis che → skip broadcast.
+function isBatchAwaitingSynthesis(agentIds: string[]): boolean {
+  if (!agentIds.length) return false;
+  for (const batchKey of synthesisPendingBatches) {
+    const ids = batchKey.split(',');
+    if (agentIds.every((id) => ids.includes(id))) return true;
+  }
+  return false;
+}
+
 // Max chat history to prevent unbounded memory growth
-const MAX_HISTORY = MAX_PERSISTED_MESSAGES; // lưu bền vững ≥15.000 tin (đồng bộ cap persist trong storage)
+const MAX_HISTORY = MAX_PERSISTED_MESSAGES; // Unlimited: giữ toàn bộ lịch sử tin nhắn trong RAM và Database
 
 // Abort idempotency guards — prevent multiple concurrent aborts for same agent
 const abortingAgents = new Set<string>();
@@ -407,6 +491,9 @@ function loadCustomRoles() {
 function loadState() {
   try {
     const savedAgents = storage.loadAgents() as any[];
+    // Auto Continue bật → KHÔNG ép agent đang 'working' về 'idle' khi restart,
+    // giữ nguyên task + workingSince để autoResumeWorkingAgents() ping tiếp tục task dở.
+    const autoContinue = storage.getSetting('autoContinue', false) === true;
     const sessionEntries: Array<{ agentId: string; sessionId: string }> = [];
     for (const row of savedAgents) {
       if (row.name === '...' || row.id === 'agent-b895e808' || !/^[a-z0-9_-]{2,30}$/i.test(row.name)) {
@@ -414,15 +501,16 @@ function loadState() {
         storage.deleteAgent(row.id);
         continue;
       }
+      const keepWorking = autoContinue && row.status === 'working';
       const agent: Agent = {
         id: row.id, name: row.name, role: row.role, type: row.type,
-        status: row.status === 'working' ? 'idle' : row.status,
+        status: keepWorking ? 'working' : (row.status === 'working' ? 'idle' : row.status),
         spawnedBy: row.spawned_by, projectDir: row.project_dir, 
         model: row.model || undefined,
         sessionId: row.session_id || undefined,
         sessionTitle: row.session_title ? String(row.session_title).normalize('NFC') : undefined,
         task: row.task ? String(row.task).normalize('NFC') : undefined,
-        createdAt: row.created_at, workingSince: undefined,
+        createdAt: row.created_at, workingSince: keepWorking ? (row.workingSince || row.working_since || Date.now()) : undefined,
         tokenUsage: row.token_usage || undefined,
         contextLength: row.context_length || undefined
       };
@@ -445,7 +533,7 @@ function loadState() {
       storage.saveAgent(orch);
     }
     console.log(`[Storage] Loaded ${savedAgents.length} agents, restored ${sessionEntries.length} orchestrator sessions`);
-    const savedHistory = storage.loadHistory(500) as any[];
+    const savedHistory = storage.loadHistory() as any[];
     for (const row of savedHistory) {
       chatHistory.push({
         id: row.id,
@@ -455,7 +543,8 @@ function loadState() {
         timestamp: row.timestamp,
         agentName: row.agentName || row.agent_name,
         agentRole: row.agentRole || row.agent_role,
-        msgType: row.msgType || row.msg_type || 'chat'
+        msgType: row.msgType || row.msg_type || 'chat',
+        thinking: row.thinking
       });
     }
     console.log(`[Storage] Loaded ${savedHistory.length} messages`);
@@ -556,11 +645,20 @@ function broadcastOACEvent(agentId: string, ev: any) {
     let textLines: string[] = [];
     const toolCalls: Array<{ tool: string; input?: any; output?: any }> = [];
     let evThinking = '';
+    let allowThinking = false;
+    // Option C: parts giữ ĐÚNG THỨ TỰ opencode emit (text + tool xen kẽ) trong batch này.
+    // Client render interleaved qua msg.parts; khi không cần xen kẽ (chỉ text / chỉ tool) → bỏ parts.
+    const parts: Array<{ type: 'text' | 'tool'; content?: string; tool?: string; input?: any; output?: any }> = [];
+    let partsHasText = false;
+    let partsHasTool = false;
     const asText = (v: any): string | undefined => {
       if (v === undefined || v === null) return undefined;
       return typeof v === 'string' ? v : JSON.stringify(v);
     };
     if (ev?.kind === 'in') {
+      // Cho phép thinking block khi có prompt input
+      allowThinking = true;
+      agentThinkingAllowed.add(agentId);
       // Bỏ qua prompt input thô — không broadcast lên khung chat UI
       return;
     } else if (ev?.kind === 'batch' && Array.isArray(ev.events)) {
@@ -581,45 +679,122 @@ function broadcastOACEvent(agentId: string, ev: any) {
         const isTool = isToolUse || isToolResult;
         if (t === 'text' && e.part?.text) {
           textLines.push(e.part.text);
+          parts.push({ type: 'text', content: e.part.text });
+          partsHasText = true;
         } else if (isTool) {
           const p = e.part || {};
           const st: any = p.state || {};
           const input = asText(isToolUse ? (p.input ?? st.input) : (p.input ?? st.input));
           const outputRaw = asText(isToolUse ? (p.output ?? st.output) : (p.output ?? st.output ?? p.content ?? e.data?.output));
           const output = outputRaw === undefined ? undefined : stripAnsi(outputRaw);
+          const toolName = String(p.tool || (isToolResult ? 'result' : 'tool'));
           // Đẩy vào mảng cấu trúc — UI render hộp toolcall riêng, KHÔNG đụng textLines
           toolCalls.push({
-            tool: String(p.tool || (isToolResult ? 'result' : 'tool')),
+            tool: toolName,
             ...(input !== undefined ? { input } : {}),
             ...(output !== undefined ? { output } : {})
           });
+          // Option C: giữ thứ tự — cũng push tool vào parts (xen kẽ với text)
+          parts.push({
+            type: 'tool',
+            tool: toolName,
+            ...(input !== undefined ? { input } : {}),
+            ...(output !== undefined ? { output } : {})
+          });
+          partsHasTool = true;
         } else if (t === 'error') {
-          textLines.push(`✖ ERROR: ${e.error?.data?.message || e.error?.message || e.error?.name || JSON.stringify(e.error) || 'unknown'}`);
+          const errStr = `✖ ERROR: ${e.error?.data?.message || e.error?.message || e.error?.name || JSON.stringify(e.error) || 'unknown'}`;
+          textLines.push(errStr);
+          parts.push({ type: 'text', content: errStr });
+          partsHasText = true;
         } else if (tt === 'thinking' || tt === 'reasoning' || tt === 'thought') {
           // Suy nghĩ nội bộ: gom riêng vào msg.thinking, KHÔNG trộn vào textLines
           const rt = e.part?.text || e.text || e.part?.thinking || e.thinking;
-          if (typeof rt === 'string' && rt.trim()) evThinking += (evThinking ? '\n' : '') + rt;
+          if (typeof rt === 'string' && rt.trim()) {
+            evThinking += (evThinking ? '\n' : '') + rt;
+            // REALTIME THINKING: broadcast NGAY từng khúc reasoning lên UI (fix debugroot —
+            // trước đây chỉ gom vào evThinking rồi gửi trong snapshot CUỐI → user thấy text trước,
+            // thinking sau, dù model emit reasoning trước). UI upsertStreamMsg cùng key với text
+            // để hộp thinking hiện live TRƯỚC khi text chạy tới, trong cùng 1 message stream.
+            // GATE allowThinking: chỉ broadcast khi agent đã nhận event 'in' (user chưa tắt thinking).
+            try {
+              if (agentThinkingAllowed.has(agentId)) {
+                broadcast('chat:thinking', { agentId, from: agentId, thinkingText: rt });
+              }
+            } catch { /* broadcast fail không làm dừng pipeline */ }
+          }
         } else if (t === 'assistant' || t === 'user' || t === 'system' || t === 'session' || t === 'init' || t === 'done') {
           const txt = e.part?.text || e.message || e.content || (e.parts ? JSON.stringify(e.parts) : '');
-          if (txt) textLines.push(`${t.toUpperCase()}: ${txt}`);
+          if (txt) {
+            const seg = `${t.toUpperCase()}: ${txt}`;
+            textLines.push(seg);
+            parts.push({ type: 'text', content: seg });
+            partsHasText = true;
+          }
         } else {
           // Fallback: compact JSON cho các loại event khác — vẫn là TEXT, không phải tool
-          textLines.push(`◆ ${t}: ${JSON.stringify(e).slice(0, 2000)}`);
+          const seg = `◆ ${t}: ${JSON.stringify(e).slice(0, 2000)}`;
+          textLines.push(seg);
+          parts.push({ type: 'text', content: seg });
+          partsHasText = true;
         }
       }
     }
     if (textLines.length === 0 && toolCalls.length === 0 && !evThinking) return;
+
+    // LIVE STREAM: text từ stdio được gửi dạng chat:chunk để UI gộp vào 1 bubble đang chạy
+    // (upsertStreamMsg accumulate) — không tạo nhiều bubble snapshot rời rạc.
+    if (textLines.length > 0) {
+      broadcast('chat:chunk', {
+        agentId,
+        from: agentId,
+        to: agentId,
+        textDelta: textLines.join('\n\n')
+      });
+    }
+
+    // Snapshot cho thinking/tool: giữ nguyên để UI render hộp thinking + tool riêng.
+    // content cố ý rỗng (text đã đi qua chat:chunk) để tránh trùng lặp nội dung.
     const msg: any = {
       id: `oac-${agentId}-${ev?.seq ?? 0}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       from: agentId,
       to: agentId,
-      content: textLines.join('\n\n'), // Chỉ chứa lời thoại!
+      content: '',
       timestamp: Date.now(),
       msgType: 'opencode',
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined, // Chỉ chứa ToolCall!
-      thinking: evThinking || undefined // Suy nghĩ nội bộ (hộp mờ riêng)
+      thinking: evThinking || undefined, // Suy nghĩ nội bộ (hộp mờ riêng)
+      // Option C: parts giữ thứ tự emit (text + tool xen kẽ) — chỉ set khi batch có CẢ text lẫn tool
+      // (có ý nghĩa interleaving). Khi vắng parts, client render cũ (content/toolCalls/thinking).
+      parts: (partsHasText && partsHasTool && parts.length > 0) ? parts : undefined
     };
     broadcast('chat:message', { msg });
+    // PERSIST snapshot opencode: trước đây chỉ broadcast (KHÔNG lưu) → restart bị mất thinking/toolCalls.
+    // Client render thinking từ history (ChatPanel L2072-2083) nên phải lưu storage để phục hồi sau restart.
+    // Giới hạn: UPSERT 1 bản mới nhất/agent (xóa bản opencode cũ cùng from) — không phình vô hạn
+    // (MAX_HISTORY/MAX_PERSISTED_MESSAGES đều = Infinity nên trim cũ không chạy).
+    // Giữ nguyên id random để client live-merge (App.tsx L286-299) hoạt động như cũ.
+    // MERGE thinking: kịch bản thinking→text, batch text có evThinking rỗng → msg.thinking=undefined;
+    // nếu upsert ghi đè thẳng sẽ MẤT thinking của cả session. Giữ/ghép thinking cũ khi bản mới rỗng.
+    const oacPrev = chatHistory.find(m => m.msgType === 'opencode' && m.from === agentId);
+    // Gộp parts (Option C) khi prev có parts và batch này có parts: cùng session opencode → nối chuỗi
+    // segments theo đúng thứ tự batch phát sinh, để snapshot cuối phục hồi ĐẦY ĐỦ text+tool sau restart.
+    const partsMerged =
+      (Array.isArray(msg.parts) && msg.parts.length > 0)
+        ? ((Array.isArray(oacPrev?.parts) && (oacPrev.parts as any[]).length > 0)
+            ? [...(oacPrev.parts as any[]), ...msg.parts]
+            : msg.parts)
+        : (Array.isArray(oacPrev?.parts) && (oacPrev.parts as any[]).length > 0 ? (oacPrev.parts as any[]) : undefined);
+    const mergedMsg = { ...msg,
+      thinking: (msg.thinking && String(msg.thinking).trim())
+        ? msg.thinking
+        : (oacPrev?.thinking || undefined),
+      toolCalls: (msg.toolCalls && msg.toolCalls.length) ? msg.toolCalls : (oacPrev?.toolCalls || undefined),
+      parts: partsMerged
+    };
+    const oacIdx = chatHistory.findIndex(m => m.msgType === 'opencode' && m.from === agentId);
+    if (oacIdx !== -1) chatHistory[oacIdx] = mergedMsg; else chatHistory.push(mergedMsg);
+    storage.saveOpenCodeSnapshot(mergedMsg);
   } catch (err) {
     console.error('[OAC] broadcastOACEvent error:', err);
   }
@@ -633,8 +808,8 @@ function saveTranscript(result: any, fromId: string, agentName?: string, agentRo
   storage.saveMessage(tMsg);
 }
 
-// Chấp nhận MỌI biến thể báo cáo chuẩn của các role (task/research/verification/error)
-const REPORT_BLOCK_RE = /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/i;
+// Chấp nhận MỌI biến thể báo cáo chuẩn của các role (task/research/verification/error) dạng Bracket lẫn XML <report>
+const REPORT_BLOCK_RE = /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===|<\s*(?:report|task_report|task-report|error_report|error-report)\b/i;
 const TASK_COMPLETE_RE = /Task complete\./i;
 
 // Validate worker response contains proper completion format (only for workers, not orchestrator)
@@ -789,13 +964,14 @@ function shouldIncludeTeamContext(agentId: string, hasExplicitChange = false): b
   return false;
 }
 
-// Khối định dạng bắt buộc cho worker — dạy agent cách route tin nhắn qua tag [TO:]
-// Worker không được tự SPAWN; báo cáo về main bằng [TO: orchestrator]
+// Khối định dạng bắt buộc cho worker — dạy agent cách route tin nhắn qua tag [TO:] hoặc thẻ XML <talk target="...">
+// Worker không được tự SPAWN; báo cáo về main bằng <talk target="orchestrator"> hoặc [TO: orchestrator]
 const WORKER_FORMAT_BLOCK = `
 === RESPONSE FORMAT (MANDATORY) ===
 End your reply with one or more routing lines, each on its own line:
-[TO: <target-id>] <message for that target>
-- To report your result to the Main Orchestrator, you MUST end with: [TO: orchestrator] <concise report>
+<talk target="<target-id>">your message</talk>
+(or [TO: <target-id>] <your message>)
+- To report your result to the Main Orchestrator, you MUST end with: <talk target="orchestrator">Task complete. === TASK REPORT === ...</talk> (or [TO: orchestrator] <concise report>)
 - To message another agent, use its exact ID from the Members list.
 - NEVER spawn subagents. Only the Orchestrator spawns.
 ====================================`;
@@ -1106,6 +1282,12 @@ function checkAndSynthesize(completedAgentId: string) {
   if (spawnedByOrch.length === 0) return;
   const allDone = spawnedByOrch.every(a => a.status === 'idle' || a.status === 'error');
   if (!allDone) return;
+
+  // FIX DUP ORCHESTRATOR (Option A): Đánh dấu batch này đang chờ synthesis NGAY (trước
+  // debounce timer), để processOrchestratorTriggerQueue (fire 1.5s, sớm hơn synthesis 1.8s)
+  // biết batch sẽ có summary → KHÔNG broadcast bubble per-report trùng → mỗi batch hoàn
+  // thành chỉ 1 message orchestrator→user. Flag xóa khi synthesis broadcast xong.
+  markBatchAwaitingSynthesis(spawnedByOrch.map(a => a.id));
   
   // Reset previous debounce timer if new agents are finishing
   if (synthesizeDebounceTimer) {
@@ -1160,16 +1342,42 @@ function checkAndSynthesize(completedAgentId: string) {
           ...(result.contextLength ? { contextLength: result.contextLength } : {})
         });
       }
-      // Display content giữ nguyên 100% — commands đã được extract/execute riêng bởi handleOrchestratorResponse
+      // Display content: bóc command tags, nếu có nội dung user-facing thì hiển thị trên UI
       const displayContent = (result.content || '').trim().normalize('NFC');
 
       if (displayContent) {
-        const orchMsg: ChatMsg = { id: uuidv4(), from: 'orchestrator', to: 'user', content: displayContent, timestamp: Date.now(), agentName: 'Orchestrator', agentRole: 'orchestrator' };
-        chatHistory.push(orchMsg); storage.saveMessage(orchMsg);
-        trimChatHistory();
-        broadcast('chat:message', { msg: orchMsg });
+        const userText = stripCommandTags(displayContent).trim();
+        const isInternal = !userText;
+        const orchMsg: ChatMsg = {
+          id: uuidv4(),
+          from: 'orchestrator',
+          to: 'user',
+          content: userText,
+          timestamp: Date.now(),
+          agentName: 'Orchestrator',
+          agentRole: 'orchestrator',
+          msgType: isInternal ? 'orchestrator_internal' : undefined,
+          showOnUI: !isInternal,
+          ...((result as any).thinking ? { thinking: (result as any).thinking } : {})
+        };
+        // Guard dedup broadcast (giống L2359 processOrchestratorTriggerQueue): tránh message
+        // orchestrator→user bị sinh 2 lần (Kênh synthesis này + Kênh trigger queue) hiện 2 bubble
+        // trên main vì uuidv4() mới mỗi call → dedup theo id không bắt được.
+        // Bọc CẢ push + save + broadcast trong guard: nếu duplicate thì KHÔNG tích vào chatHistory
+        // (nếu chỉ chặn broadcast mà vẫn push thì sau rehydrate UI sẽ lại duplicate).
+        if (!isBroadcastDuplicate(broadcastDedupKey(orchMsg))) {
+          chatHistory.push(orchMsg);
+          storage.saveMessage(orchMsg);
+          trimChatHistory();
+          broadcast('chat:message', { msg: orchMsg });
+        }
       }
       await handleOrchestratorResponse(result.content, (result as any).thinking || '');
+      // FIX DUP ORCHESTRATOR (Option A): synthesis đã broadcast summary xong → xóa flag batch
+      // để agent cùng batch, turn MỚI sau này vẫn broadcast bình thường (không chặn nhầm).
+      if (currentSpawned.length > 0) {
+        synthesisPendingBatches.delete(currentSpawned.map(a => a.id).sort().join(','));
+      }
     } catch (e: any) {
       console.log(`[Synthesize] Error: ${e.message}`);
     }
@@ -1177,7 +1385,7 @@ function checkAndSynthesize(completedAgentId: string) {
 }
 
 function trimChatHistory() {
-  if (chatHistory.length > MAX_HISTORY) {
+  if (Number.isFinite(MAX_HISTORY) && chatHistory.length > MAX_HISTORY) {
     chatHistory.splice(0, chatHistory.length - MAX_HISTORY);
   }
 }
@@ -1224,6 +1432,30 @@ async function parseAgentCommands(response: string, fromId: string): Promise<str
     storage.saveMessage(warnMsg);
     broadcast('chat:message', { msg: warnMsg });
   }
+
+  // 2. XML commands: <stop .../>, <stop_agent .../>, <resume .../>, <resume_agent .../>, <delete .../>
+  const xmlCmds = extractBracketCommands(cleanResponse, ['STOP', 'STOP AGENT', 'RESUME', 'RESUME AGENT', 'DELETE', 'DELETE AGENT']).filter(c => c.syntax === 'xml');
+  for (const cmd of xmlCmds) {
+    const attrText = cmd.attributes || '';
+    const targetMatch = attrText.match(/(?:agent-id|agent_id|target-id|target_id|target|agent|to|id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+    const rawTarget = targetMatch ? (targetMatch[1] || targetMatch[2] || targetMatch[3] || targetMatch[4] || targetMatch[5]) : (cmd.body || '').trim();
+    if (!rawTarget) continue;
+    const target = findAgentByIdNameOrRole(rawTarget);
+    const targetId = target ? target.id : rawTarget;
+    const tag = String(cmd?.tag ?? '').toLowerCase();
+    if (tag.includes('stop')) {
+      if (stopAgent(targetId, 'orchestrator')) results.push(`Stopped ${targetId}`);
+      else results.push(`Could not stop ${rawTarget}`);
+    } else if (tag.includes('resume')) {
+      if (resumeAgent(targetId)) results.push(`Resumed ${targetId}`);
+      else results.push(`Could not resume ${rawTarget}`);
+    } else if (tag.includes('delete')) {
+      const targetName = target ? target.name : rawTarget;
+      console.warn(`[Command] <delete> command from ${fromId} for ${targetName} (${targetId}) was blocked. Only User can delete agents.`);
+      results.push(`DELETE command ignored for ${targetName} (${targetId}): Only User has permission to delete agents from UI.`);
+    }
+  }
+
   return results;
 }
 
@@ -1316,68 +1548,221 @@ function findAgentByIdNameOrRole(identifier: string): Agent | undefined {
 // ============ BALANCED BRACKET COMMAND PARSER ============
 interface BracketCommand {
   tag: string;           // Tên thẻ: 'TALK', 'SPAWN', 'CREATE ROLE', etc.
-  content: string;       // Nội dung bên trong cặp ngoặc ngoài cùng
-  fullMatch: string;     // Chuỗi đầy đủ bao gồm cả cặp ngoặc [TAG ...]
+  content?: string;      // Nội dung bên trong cặp ngoặc ngoài cùng (bracket syntax)
+  attributes?: string;   // Chuỗi thuộc tính (XML syntax)
+  body?: string;         // Nội dung bên trong cặp thẻ <tag>...</tag> (XML syntax)
+  fullMatch: string;     // Chuỗi đầy đủ bao gồm cả cặp ngoặc [TAG ...] hoặc <tag>...</tag>
   startIndex: number;
   endIndex: number;
+  syntax?: 'bracket' | 'xml';
+}
+
+interface BracketRange {
+  tag: string;
+  startIndex: number;
+  closeIndex: number;
+  endIndex: number;
+  raw: string;
+  content: string;
 }
 
 /**
- * Trích xuất một lệnh [TAG ...] duy nhất bắt đầu từ startIndex sử dụng thuật toán đếm ngoặc cân bằng kết hợp phân tích boundary payload.
+ * Tìm phạm vi lệnh [TAG ...] cân bằng ngoặc (Balanced Bracket Range).
+ * Quản lý độ sâu ngoặc vuông lồng nhau, bỏ qua ngoặc trong chuỗi trích dẫn ("...", '...', `...`, “...”)
+ * và khối code block (```...```).
  */
-function extractBracketCommand(text: string, startIndex: number): { tag: string; content: string; fullMatch: string; endIndex: number } | null {
-  if (!text || startIndex < 0 || startIndex >= text.length || text[startIndex] !== "[") return null;
-  
-  const tagMatch = text.substring(startIndex + 1).match(/^([A-Za-z_]+(?:\s+[A-Z_]+)*)/);
-  if (!tagMatch) return null;
-  const tag = tagMatch[1];
+function findBalancedBracketRange(text: string, startIndex: number): BracketRange | null {
+  if (!text || startIndex < 0 || startIndex >= text.length || text[startIndex] !== '[') return null;
 
-  let endIdx = -1;
-  let depth = 1; // startIndex is already '['
+  const remaining = text.substring(startIndex + 1);
+  const multiMatch = remaining.match(/^(CREATE\s+ROLE|STOP\s+AGENT|RESUME\s+AGENT|DELETE\s+AGENT)\b/i);
+  let tag = '';
+  let tagLen = 0;
+  if (multiMatch) {
+    tag = multiMatch[1].toUpperCase();
+    tagLen = multiMatch[1].length;
+  } else {
+    const singleMatch = remaining.match(/^([A-Za-z_]+)\b/);
+    if (!singleMatch) return null;
+    tag = singleMatch[1].toUpperCase();
+    tagLen = singleMatch[1].length;
+  }
+
+  let depth = 0;
   let inQuote: string | null = null;
+  let inCodeBlock = false;
+  let closeIndex = -1;
+  const len = text.length;
 
-  for (let i = startIndex + 1; i < text.length; i++) {
-    const char = text[i];
-    const prevChar = text[i - 1];
+  for (let j = startIndex; j < len; j++) {
+    const char = text[j];
+    const prev = j > startIndex ? text[j - 1] : '';
 
-    if (inQuote) {
-      if (char === inQuote && prevChar !== "\\") {
+    // Xử lý Escape: \char
+    if (prev === '\\') continue;
+
+    // Xử lý Code Block ```
+    if (text.startsWith('```', j)) {
+      inCodeBlock = !inCodeBlock;
+      j += 2;
+      continue;
+    }
+    if (inCodeBlock) continue;
+
+    // Xử lý Quoted String (nháy kép, nháy đơn, inline backtick, nháy cong “ ”)
+    if (char === '"' || char === "'" || char === '`' || char === '“' || char === '”') {
+      const matchQuote = char === '“' ? '”' : char;
+      if (!inQuote) {
+        inQuote = matchQuote;
+        continue;
+      } else if (inQuote === char || (inQuote === '”' && char === '”')) {
         inQuote = null;
+        continue;
       }
-    } else {
-      if (char === '"' || char === "'" || char === '`' || char === '“' || char === '”') {
-        inQuote = char === '“' ? '”' : char;
-      } else if (char === '[') {
-        depth++;
-      } else if (char === ']') {
-        depth--;
-        if (depth === 0) {
-          endIdx = i;
-          break;
-        }
+    }
+    if (inQuote) continue; // Bỏ qua mọi dấu ngoặc vuông nằm trong chuỗi trích dẫn
+
+    // Cân bằng độ sâu ngoặc vuông
+    if (char === '[') {
+      depth++;
+    } else if (char === ']') {
+      depth--;
+      if (depth === 0) {
+        closeIndex = j;
+        break; // Đã tìm thấy dấu đóng tương ứng của lệnh ngoài cùng!
       }
     }
   }
 
-  if (endIdx !== -1 && endIdx >= startIndex) {
-    const fullMatch = text.substring(startIndex, endIdx + 1);
-    const inner = fullMatch.startsWith('[') && fullMatch.endsWith(']')
-      ? fullMatch.substring(1, fullMatch.length - 1).trim()
-      : fullMatch.replace(/^\[/, '').trim();
-    const content = inner.substring(tag.length).trim();
-    return { tag, content, fullMatch, endIndex: endIdx + 1 };
+  if (closeIndex !== -1) {
+    const raw = text.substring(startIndex, closeIndex + 1);
+    const inner = raw.substring(1, raw.length - 1).trim();
+    const content = inner.substring(tagLen).trim();
+
+    // Guard: command tags must have actual command attributes, not just conversational mentions like [TALK] or [SPAWN]
+    const tagUpper = tag.toUpperCase();
+    if (tagUpper === 'TALK') {
+      if (!/\b(?:target|agent|agent-id|agent_id|target-id|target_id|to|id)\s*=/i.test(content)) {
+        return null;
+      }
+    } else if (tagUpper === 'SPAWN') {
+      if (!/\b(?:role|name)\s*=/i.test(content)) {
+        return null;
+      }
+    }
+
+    return {
+      tag,
+      startIndex,
+      closeIndex,
+      endIndex: closeIndex + 1,
+      raw,
+      content
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Trích xuất một lệnh [TAG ...] duy nhất bắt đầu từ startIndex sử dụng thuật toán đếm ngoặc cân bằng.
+ */
+function extractBracketCommand(text: string, startIndex: number): { tag: string; content: string; fullMatch: string; startIndex: number; endIndex: number } | null {
+  const match = findBalancedBracketRange(text, startIndex);
+  if (!match) return null;
+  return {
+    tag: match.tag,
+    content: match.content,
+    fullMatch: match.raw,
+    startIndex: match.startIndex,
+    endIndex: match.endIndex
+  };
+}
+
+/**
+ * Trích xuất một lệnh XML-style <tag ...>...</tag> hoặc self-closing <tag ... />
+ */
+function extractXmlCommand(text: string, startIndex: number, targetTag: string): BracketCommand | null {
+  const normTag = targetTag.toLowerCase().replace(/[\s_-]+/g, '[-_\\s]?');
+  const openPattern = new RegExp(`^<(${normTag})(?:\\s+[^>]*)?(?:>|\\/>)`, 'i');
+  const match = text.substring(startIndex).match(openPattern);
+  if (!match) return null;
+
+  const openTag = match[0];
+  const isSelfClosing = openTag.endsWith('/>') || openTag.endsWith('/ >');
+  const tagUpper = targetTag.toUpperCase().replace(/[-_]+/g, ' ');
+
+  // Extract raw attribute string
+  const rawTagMatch = openTag.match(/^<([a-zA-Z0-9_-]+)/);
+  const matchedTagName = rawTagMatch ? rawTagMatch[1] : targetTag;
+  const attrText = openTag.slice(matchedTagName.length + 1, isSelfClosing ? (openTag.endsWith('/ >') ? -3 : -2) : -1).trim();
+
+  if (isSelfClosing) {
+    return {
+      tag: tagUpper,
+      attributes: attrText,
+      body: '',
+      fullMatch: openTag,
+      startIndex,
+      endIndex: startIndex + openTag.length,
+      syntax: 'xml'
+    };
+  }
+
+  // Look for closing tag </targetTag>
+  const closeTagPattern = new RegExp(`</${normTag}>`, 'i');
+  const afterOpen = text.substring(startIndex + openTag.length);
+  const closeMatch = afterOpen.match(closeTagPattern);
+
+  // Validate that it is a REAL command tag, not just a conversational mention of <talk> or <spawn>
+  const tagLower = tagUpper.toLowerCase();
+  const hasRoutingAttr = /\b(?:target|target-id|target_id|agent-id|agent_id|agent|role|name|to|id)\s*=/i.test(attrText);
+  if (!closeMatch && !hasRoutingAttr && !isSelfClosing) {
+    return null;
+  }
+  if (tagLower === 'talk' && !hasRoutingAttr && !closeMatch) {
+    return null;
+  }
+  if (tagLower === 'spawn' && !hasRoutingAttr && !closeMatch) {
+    return null;
+  }
+
+  if (closeMatch && closeMatch.index !== undefined) {
+    const body = afterOpen.substring(0, closeMatch.index);
+    const totalLength = openTag.length + closeMatch.index + closeMatch[0].length;
+    return {
+      tag: tagUpper,
+      attributes: attrText,
+      body: body.trim(),
+      fullMatch: text.substring(startIndex, startIndex + totalLength),
+      startIndex,
+      endIndex: startIndex + totalLength,
+      syntax: 'xml'
+    };
   } else {
-    const nextTag = text.indexOf('\n[', startIndex + 1);
-    const fallbackEnd = nextTag !== -1 ? nextTag : text.length;
-    const fullMatch = text.substring(startIndex, fallbackEnd);
-    const inner = fullMatch.replace(/^\[/, '').trim();
-    const content = inner.substring(tag.length).trim();
-    return { tag, content, fullMatch, endIndex: fallbackEnd };
+    // Unclosed XML tag fallback - extends to next valid command tag or EOF
+    // Search strictly for known command tags: <talk, <spawn, <stop, <resume, <create_role, [TALK, [SPAWN, [STOP, [RESUME, [CREATE ROLE
+    const nextTagIdx = afterOpen.search(/(?:<\s*(?:talk|spawn|stop|resume|create_role|create-role|stop_agent|resume_agent|delete_agent)\b|\[(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE|STOP AGENT|RESUME AGENT|DELETE AGENT)\b)/i);
+    const bodyLength = nextTagIdx !== -1 ? nextTagIdx : afterOpen.length;
+    const body = afterOpen.substring(0, bodyLength);
+    const totalLength = openTag.length + bodyLength;
+    return {
+      tag: tagUpper,
+      attributes: attrText,
+      body: body.trim(),
+      fullMatch: text.substring(startIndex, startIndex + totalLength),
+      startIndex,
+      endIndex: startIndex + totalLength,
+      syntax: 'xml'
+    };
   }
 }
 
 /** Code-span helper: BO QUA tag nam trong `...` inline hoac ```...``` fenced */
-function getCodeSpanRanges(text: string): Array<[number, number]> {
+// Detect ONLY code-fence (```) and inline backtick spans. Used to exclude literal
+// `=== TASK REPORT ===` markers / `<report>` tags that appear INSIDE code examples,
+// so extractCleanTaskReport doesn't disembowel a genuine report or swallow a code sample.
+export function getCodeFenceRanges(text: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   let i = 0;
   while (i < text.length) {
@@ -1387,14 +1772,24 @@ function getCodeSpanRanges(text: string): Array<[number, number]> {
       ranges.push([i, text.length] as [number, number]); break;
     }
     if (text[i] === '`') {
+      const nextNewline = text.indexOf('\n', i + 1);
       const end = text.indexOf('`', i + 1);
-      if (end !== -1) { ranges.push([i, end + 1] as [number, number]); i = end + 1; continue; }
+      if (end !== -1 && (nextNewline === -1 || end < nextNewline)) {
+        ranges.push([i, end + 1] as [number, number]);
+        i = end + 1;
+        continue;
+      }
     }
     i++;
   }
-  // Also protect Task Report blocks: === TASK REPORT === ... === END REPORT ===
-  const reportStartRe = /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/gi;
-  const reportEndRe = /===\s*END[^=\n]*REPORT\s*===/gi;
+  return ranges;
+}
+
+function getCodeSpanRanges(text: string): Array<[number, number]> {
+  const ranges = getCodeFenceRanges(text);
+  // Also protect Task Report blocks: === TASK REPORT === ... === END REPORT === and <report> ... </report>
+  const reportStartRe = /(?:===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===|<\s*(?:report|task_report|task-report|error_report|error-report)\b[^>]*>)/gi;
+  const reportEndRe = /(?:===\s*END[^=\n]*REPORT\s*===|<\/\s*(?:report|task_report|task-report|error_report|error-report)\s*>)/gi;
   let rm: RegExpExecArray | null;
   while ((rm = reportStartRe.exec(text)) !== null) {
     const startIdx = rm.index;
@@ -1414,15 +1809,21 @@ function getCodeSpanRanges(text: string): Array<[number, number]> {
       spawnIdx === -1 ? Infinity : spawnIdx
     );
     if (nextTag === Infinity) break;
-    const tagEnd = text.indexOf(']', nextTag);
-    if (tagEnd === -1) { scan = nextTag + 1; continue; }
-    const tagBody = text.substring(nextTag, tagEnd + 1);
-    const attrMatch = tagBody.match(/\b(?:message|msg|content)\s*=\s*(?:"|'|“)([\s\S]*?)(?:"|'|”)/);
+    const cmd = findBalancedBracketRange(text, nextTag);
+    if (!cmd) { scan = nextTag + 1; continue; }
+    const attrMatch = cmd.content.match(/\b(?:message|msg|content)\s*=\s*(?:"|'|“)([\s\S]*?)(?:"|'|”)/);
     if (attrMatch && attrMatch[1] !== undefined) {
-      const valueStart = nextTag + attrMatch[0].indexOf(attrMatch[1]);
+      const valueStart = cmd.startIndex + cmd.raw.indexOf(attrMatch[1]);
       ranges.push([valueStart, valueStart + attrMatch[1].length] as [number, number]);
     }
-    scan = tagEnd + 1;
+    scan = cmd.endIndex;
+  }
+  // Protect blockquotes: dòng bắt đầu bằng ">" là DỮ LIỆU trích dẫn minh họa, không phải lệnh.
+  // Chặn cả dòng để tag [TALK]/[SPAWN] trong blockquote không được thực thi (thay cho sanitize).
+  const bqRe = /^[ \t]*>[ \t]?\S.*$/gm;
+  let bm: RegExpExecArray | null;
+  while ((bm = bqRe.exec(text)) !== null) {
+    ranges.push([bm.index, bm.index + bm[0].length] as [number, number]);
   }
   return ranges;
 }
@@ -1432,64 +1833,94 @@ function isInCodeSpan(idx: number, ranges: Array<[number, number]>): boolean {
 }
 
 /**
- * Trích xuất các lệnh [TAG ...] sử dụng thuật toán đếm ngoặc cân bằng (Balanced Bracket).
- * Quản lý chính xác độ sâu lồng nhau và trạng thái quote để xử lý các message phức tạp.
+ * Trích xuất các lệnh [TAG ...] hoặc XML tags <tag ...> sử dụng thuật toán Dual-Syntax Scanner.
+ * Hỗ trợ song song cả hai cú pháp Bracket và XML, nhận diện chính xác độ sâu lồng nhau và trạng thái quote.
  */
-function extractBracketCommands(text: string, targetTags: string[] = ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME']): BracketCommand[] {
+function extractDualCommands(text: string, targetTags: string[] = ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT']): BracketCommand[] {
   const commands: BracketCommand[] = [];
   if (!text) return commands;
-  // FIX strip-backtick: bo qua tag nam trong `inline` hoac ```fenced``` code span
   const codeRanges = getCodeSpanRanges(text);
 
   let pos = 0;
   while (pos < text.length) {
-    let earliestTag: string | null = null;
+    let earliestMatch: { type: 'bracket' | 'xml'; tag: string; searchTag: string } | null = null;
     let earliestIdx = -1;
 
     for (const tag of targetTags) {
-      let searchFrom = pos;
+      // 1. Bracket search: [TAG ...
+      let searchBracket = pos;
       while (true) {
-        const idx = text.indexOf(`[${tag}`, searchFrom);
+        const idx = text.indexOf(`[${tag}`, searchBracket);
         if (idx === -1) break;
         const nextChar = text[idx + 1 + tag.length];
         const boundaryOk = !nextChar || /\s|:|\]|=/.test(nextChar);
-        // Chi chap nhan tag NGOAI code-span (backtick don / ba backtick)
         if (boundaryOk && !isInCodeSpan(idx, codeRanges)) {
           if (earliestIdx === -1 || idx < earliestIdx) {
             earliestIdx = idx;
-            earliestTag = tag;
+            earliestMatch = { type: 'bracket', tag, searchTag: tag };
           }
           break;
         }
-        searchFrom = idx + 1; // match nam trong code-span -> thu vi tri ke tiep
+        searchBracket = idx + 1;
+      }
+
+      // 2. XML search: <tag ... or <TAG ...
+      let searchXml = pos;
+      const tagLower = tag.toLowerCase().replace(/\s+/g, '_');
+      const tagLowerDash = tag.toLowerCase().replace(/\s+/g, '-');
+      const xmlVariants = [tagLower];
+      if (tagLowerDash !== tagLower) xmlVariants.push(tagLowerDash);
+
+      for (const variant of xmlVariants) {
+        let sXml = searchXml;
+        while (true) {
+          const idxLower = text.toLowerCase().indexOf(`<${variant}`, sXml);
+          if (idxLower === -1) break;
+          const nextChar = text[idxLower + 1 + variant.length];
+          const boundaryOk = !nextChar || /\s|>|\//.test(nextChar);
+          if (boundaryOk && !isInCodeSpan(idxLower, codeRanges)) {
+            if (earliestIdx === -1 || idxLower < earliestIdx) {
+              earliestIdx = idxLower;
+              earliestMatch = { type: 'xml', tag, searchTag: variant };
+            }
+            break;
+          }
+          sXml = idxLower + 1;
+        }
       }
     }
 
-    if (earliestIdx === -1 || !earliestTag) {
-      break;
-    }
+    if (earliestIdx === -1 || !earliestMatch) break;
 
-    const cmd = extractBracketCommand(text, earliestIdx);
-    if (cmd) {
-      commands.push({
-        tag: earliestTag,
-        content: cmd.content,
-        fullMatch: cmd.fullMatch,
-        startIndex: earliestIdx,
-        endIndex: cmd.endIndex
-      });
-      pos = cmd.endIndex;
-    } else {
-      pos = earliestIdx + 1 + earliestTag.length;
+    if (earliestMatch.type === 'bracket') {
+      const cmd = extractBracketCommand(text, earliestIdx);
+      if (cmd) {
+        commands.push({ ...cmd, syntax: 'bracket' });
+        pos = cmd.endIndex;
+      } else {
+        pos = earliestIdx + 1;
+      }
+    } else if (earliestMatch.type === 'xml') {
+      const cmd = extractXmlCommand(text, earliestIdx, earliestMatch.searchTag);
+      if (cmd) {
+        commands.push(cmd);
+        pos = cmd.endIndex;
+      } else {
+        pos = earliestIdx + 1;
+      }
     }
   }
 
   return commands;
 }
 
+function extractBracketCommands(text: string, targetTags: string[] = ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT']): BracketCommand[] {
+  return extractDualCommands(text, targetTags);
+}
+
 function stripCommandTags(text: string): string {
   if (!text) return '';
-  const commands = extractBracketCommands(text, ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT']);
+  const commands = extractDualCommands(text, ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT']);
   if (commands.length === 0) return text.trim();
   let result = '';
   let lastIndex = 0;
@@ -1498,32 +1929,37 @@ function stripCommandTags(text: string): string {
     lastIndex = cmd.endIndex;
   }
   result += text.substring(lastIndex);
+  // Loại bỏ các thẻ đóng BBCode và XML closing tags nếu còn sót
+  result = result.replace(/\[\/(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE|STOP AGENT|RESUME AGENT|DELETE AGENT)\]/gi, '');
+  result = result.replace(/<\/(?:talk|spawn|stop|stop_agent|stop-agent|resume|resume_agent|resume-agent|create_role|create-role|delete|delete_agent|delete-agent)>/gi, '');
   return result.trim();
+}
+
+function stripQuotes(v: string): string {
+  if (!v) return '';
+  let t = v.trim();
+  if (t.length >= 2 &&
+      ((t.startsWith('"') && t.endsWith('"')) ||
+       (t.startsWith("'") && t.endsWith("'")) ||
+       (t.startsWith('“') && t.endsWith('”')) ||
+       (t.startsWith('‘') && t.endsWith('’')))) {
+    return t.substring(1, t.length - 1).trim();
+  }
+  if (t.startsWith('"') || t.startsWith("'") || t.startsWith('“') || t.startsWith('‘')) {
+    const startChar = t[0];
+    const closingQuote = startChar === '“' ? '”' : (startChar === '‘' ? '’' : startChar);
+    const lastQuote = t.lastIndexOf(closingQuote);
+    if (lastQuote > 0) return t.substring(1, lastQuote).trim();
+    return t.substring(1).trim();
+  }
+  if (t.endsWith(']')) {
+    t = t.substring(0, t.length - 1).trim();
+  }
+  return t;
 }
 
 function parseTalkTag(tagContent: string): { agentId: string; message: string; task?: string } | null {
   if (!tagContent) return null;
-
-  const stripQuotes = (v: string): string => {
-    let t = v.trim();
-    if (t.length >= 2 &&
-        ((t.startsWith('"') && t.endsWith('"')) ||
-         (t.startsWith("'") && t.endsWith("'")) ||
-         (t.startsWith('“') && t.endsWith('”')))) {
-      return t.substring(1, t.length - 1).trim();
-    }
-    if (t.startsWith('"') || t.startsWith("'") || t.startsWith('“')) {
-      const closingQuote = t[0] === '“' ? '”' : t[0];
-      const lastQuote = t.lastIndexOf(closingQuote);
-      if (lastQuote > 0) return t.substring(1, lastQuote).trim();
-      return t.substring(1).trim();
-    }
-    // Nếu message không dùng quote mà bị dính dấu ] đóng tag ở cuối chuỗi do lồng ký tự [
-    if (t.endsWith(']')) {
-      t = t.substring(0, t.length - 1).trim();
-    }
-    return t;
-  };
 
   // 1. Trích xuất target/agent-id trước
   const targetMatch = tagContent.match(/(?:agent-id|agent_id|target-id|target_id|target|agent|to|id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s\]]+))/i);
@@ -1570,6 +2006,49 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
     return { agentId, message: finalMessage, ...(trimmedTask ? { task: trimmedTask } : {}) };
   }
   return null;
+}
+
+function parseTalkCommand(cmd: BracketCommand): { agentId: string; message: string; task?: string } | null {
+  if (!cmd) return null;
+
+  if (cmd.syntax === 'xml') {
+    const attrText = cmd.attributes || '';
+    const targetMatch = attrText.match(/(?:agent-id|agent_id|target-id|target_id|target|agent|to|id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+    const rawId = targetMatch ? (targetMatch[1] || targetMatch[2] || targetMatch[3] || targetMatch[4] || targetMatch[5]) : '';
+    const agentId = cleanTargetIdentifier(rawId);
+    if (!agentId) return null;
+
+    let task: string | undefined = undefined;
+    const taskMatch = attrText.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+    if (taskMatch) {
+      task = stripQuotes(taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4] || taskMatch[5] || '');
+    }
+
+    // Message can be body or message attribute
+    let message = cmd.body || '';
+    if (!task && message) {
+      const taskTagMatch = message.match(/<task>([\s\S]*?)<\/task>/i);
+      if (taskTagMatch) {
+        task = taskTagMatch[1].trim();
+        message = message.replace(/<task>[\s\S]*?<\/task>/i, '').trim();
+      }
+    }
+    if (!message) {
+      const msgAttrMatch = attrText.match(/\b(?:message|msg|content)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+      if (msgAttrMatch) {
+        message = stripQuotes(msgAttrMatch[1] || msgAttrMatch[2] || msgAttrMatch[3] || msgAttrMatch[4] || msgAttrMatch[5] || '');
+      }
+    }
+
+    const finalMessage = message.trim() || (task ? `New task: ${task}` : '');
+    if (agentId && finalMessage) {
+      return { agentId, message: finalMessage, ...(task ? { task: task.trim() } : {}) };
+    }
+    return null;
+  }
+
+  // Bracket syntax fallback
+  return parseTalkTag(cmd.content || '');
 }
 
 function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): { to: string; message: string; task?: string }[] {
@@ -1691,7 +2170,21 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
       deduped.push(m);
     }
   }
-  return deduped;
+
+  // Gộp segment trùng Orchestrator: nhiều phân đoạn liên tiếp cùng resolvedTo === 'orchestrator'
+  // (sinh ra do agent nói về orchestrator nhiều lần / nhiều [TO: orchestrator]) → gộp làm 1 message
+  // để tránh Orchestrator bị spam nhiều turn liên tiếp cùng một lượt trả lời của agent.
+  const merged: typeof deduped = [];
+  for (const m of deduped) {
+    const last = merged[merged.length - 1];
+    if (last && last.to === 'orchestrator' && m.to === 'orchestrator') {
+      last.message = `${last.message}\n\n${m.message}`;
+      if (m.task) last.task = last.task || m.task;
+    } else {
+      merged.push({ ...m });
+    }
+  }
+  return merged;
 }
 
 // Strip code blocks and blockquotes to avoid parsing example tags as real commands
@@ -1703,69 +2196,71 @@ function sanitizeCommandInput(text: string): string {
     .replace(/^\s*>.*$/gm, '');     // strip blockquotes
 }
 
+function parseSpawnCommand(cmd: BracketCommand): { role: string; name: string; task: string } | null {
+  if (!cmd) return null;
+
+  const INVALID_PLACEHOLDERS = new Set(['<role>', '<name>', '<task>', 'role', 'name', 'task', '...', 'none', 'undefined', 'null', 'your-name', '<your-name>']);
+
+  if (cmd.syntax === 'xml') {
+    const attrText = cmd.attributes || '';
+    const roleMatch = attrText.match(/\brole\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s>]+))/i);
+    const nameMatch = attrText.match(/\bname\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s>]+))/i);
+    const taskMatch = attrText.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s>]+))/i);
+
+    const role = cleanTargetIdentifier(roleMatch ? (roleMatch[1] || roleMatch[2] || roleMatch[3] || roleMatch[4]) : '').toLowerCase();
+    const name = cleanTargetIdentifier(nameMatch ? (nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4]) : '');
+    let task = stripQuotes(taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4]) : '');
+    if (!task && cmd.body) {
+      const taskTagMatch = cmd.body.match(/<task>([\s\S]*?)<\/task>/i);
+      if (taskTagMatch) {
+        task = taskTagMatch[1].trim();
+      } else {
+        task = cmd.body.trim();
+      }
+    }
+
+    if (role && name && task && !INVALID_PLACEHOLDERS.has(role) && !INVALID_PLACEHOLDERS.has(name.toLowerCase())) {
+      return { role, name, task };
+    }
+    return null;
+  }
+
+  // Bracket syntax
+  const attrsText = cmd.content || '';
+  const roleMatch = attrsText.match(/role=(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+  const nameMatch = attrsText.match(/name=(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|(\S+))/i);
+  const taskRegex = /task\s*=\s*/i;
+  const taskMatch = attrsText.match(taskRegex);
+
+  if (roleMatch && nameMatch && taskMatch) {
+    let role = (roleMatch[1] || roleMatch[2] || roleMatch[3] || '').trim().toLowerCase();
+    let name = (nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4] || '').trim();
+    role = cleanTargetIdentifier(role);
+    name = cleanTargetIdentifier(name);
+    if (!role || !name || INVALID_PLACEHOLDERS.has(role) || INVALID_PLACEHOLDERS.has(name.toLowerCase())) {
+      return null;
+    }
+    const taskIndex = attrsText.search(taskRegex);
+    const valStart = taskIndex + taskMatch[0].length;
+    let rawTask = attrsText.substring(valStart).trim();
+    rawTask = stripQuotes(rawTask);
+    const task = rawTask.trim().normalize('NFC');
+    if (task && !INVALID_PLACEHOLDERS.has(task.toLowerCase())) {
+      return { role, name, task };
+    }
+  }
+  return null;
+}
+
 function parseSpawnTags(text: string): Array<{ role: string; name: string; task: string }> {
   const spawns: Array<{ role: string; name: string; task: string }> = [];
   if (!text) return spawns;
-  
-  // Trích xuất lệnh SPAWN nằm NGOÀI code-span (tránh bắt nhầm ví dụ trong code block / backtick)
   const commands = extractBracketCommands(text, ['SPAWN']);
-  
-  const INVALID_PLACEHOLDERS = new Set(['<role>', '<name>', '<task>', 'role', 'name', 'task', '...', 'none', 'undefined', 'null', 'your-name', '<your-name>']);
-
   for (const cmd of commands) {
-    const attrsText = cmd.content;
-    const roleMatch = attrsText.match(/role=(?:"([^"]+)"|'([^']+)'|(\S+))/i);
-    const nameMatch = attrsText.match(/name=(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|(\S+))/i);
-    
-    const taskRegex = /task\s*=\s*/i;
-    const taskMatch = attrsText.match(taskRegex);
-    
-    if (roleMatch && nameMatch && taskMatch) {
-      let role = (roleMatch[1] || roleMatch[2] || roleMatch[3] || '').trim().toLowerCase();
-      let name = (nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4] || '').trim();
-      
-      // Loại bỏ dấu ngoặc nhọn <...> hoặc ngoặc kép nếu còn sót
-      role = cleanTargetIdentifier(role);
-      name = cleanTargetIdentifier(name);
-
-      // Chặn placeholder rác không hợp lệ
-      if (!role || !name || INVALID_PLACEHOLDERS.has(role) || INVALID_PLACEHOLDERS.has(name.toLowerCase())) {
-        console.warn(`[SpawnParse] Bỏ qua SPAWN chứa placeholder không hợp lệ: role="${role}", name="${name}"`);
-        continue;
-      }
-
-      // Tên và role phải tuân thủ format an toàn
-      if (!/^[a-z0-9_-]{2,40}$/i.test(role) || !/^[a-z0-9_-]{2,40}$/i.test(name)) {
-        console.warn(`[SpawnParse] Bỏ qua SPAWN với format tên/role không hợp lệ: role="${role}", name="${name}"`);
-        continue;
-      }
-
-      const taskIndex = attrsText.search(taskRegex);
-      const valStart = taskIndex + taskMatch[0].length;
-      let rawTask = attrsText.substring(valStart).trim();
-      
-      if ((rawTask.startsWith('"') && rawTask.endsWith('"')) ||
-          (rawTask.startsWith("'") && rawTask.endsWith("'")) ||
-          (rawTask.startsWith('“') && rawTask.endsWith('”'))) {
-        rawTask = rawTask.substring(1, rawTask.length - 1);
-      } else if (rawTask.startsWith('"') || rawTask.startsWith("'") || rawTask.startsWith('“')) {
-        const quote = rawTask[0];
-        const closingQuote = quote === '“' ? '”' : quote;
-        const lastQuote = rawTask.lastIndexOf(closingQuote);
-        if (lastQuote > 0) {
-          rawTask = rawTask.substring(1, lastQuote);
-        }
-      }
-      
-      const task = rawTask.trim().normalize('NFC');
-      if (task && !INVALID_PLACEHOLDERS.has(task.toLowerCase())) {
-        spawns.push({ role, name, task });
-        console.log(`[SpawnParse] Hợp lệ: role=${role} name=${name} task="${task.slice(0, 60)}..."`);
-      } else {
-        console.warn(`[SpawnParse] Bỏ qua SPAWN do task rỗng hoặc là placeholder.`);
-      }
-    } else {
-      console.warn(`[SpawnParse] Lệnh SPAWN không đủ thuộc tính role/name/task: attrs=${JSON.stringify(attrsText.slice(0, 150))}`);
+    const parsed = parseSpawnCommand(cmd);
+    if (parsed) {
+      spawns.push(parsed);
+      console.log(`[SpawnParse] Hợp lệ: role=${parsed.role} name=${parsed.name} task="${parsed.task.slice(0, 60)}..."`);
     }
   }
   return spawns;
@@ -1776,7 +2271,7 @@ function parseOrchestratorCommands(text: string): Array<{ agentId: string; messa
   if (!text) return talks;
   const commands = extractBracketCommands(text, ['TALK']);
   for (const cmd of commands) {
-    const parsed = parseTalkTag(cmd.content);
+    const parsed = parseTalkCommand(cmd);
     if (parsed) {
       talks.push(parsed);
     }
@@ -1790,6 +2285,9 @@ let pendingOrchTriggers: Array<{ fromAgent: Agent; message: string; reportId: st
 const ORCH_TRIGGER_DEBOUNCE_MS = 1500; // 1.5s debounce gom báo cáo từ nhiều worker
 const ORCH_MAX_RETRY = 5; // số lần retry in-session trước khi chờ restart replay
 const ABORT_ERROR_PATTERN = /Agent operation aborted by user|turn failed/i;
+// Dedup triggerOrchestrator: chống gửi trùng (fromAgent.id, nội dung) trong cửa sổ ngắn
+const ORCH_TRIGGER_DEDUP_MS = 5000;
+const orchTriggerDedupAt = new Map<string, number>();
 // Auto-wakeup khi worker im lặng nhưng có tool_use thật: throttle 30s/agent chống loop
 const TOOL_WAKEUP_THROTTLE_MS = 30000;
 const lastToolWakeupAt = new Map<string, number>();
@@ -1804,6 +2302,28 @@ function resolveOrchestratorTarget(fromAgent: Agent): string {
 
 async function triggerOrchestrator(fromAgent: Agent, message: string, existingReportId?: string) {
   const targetOrchId = resolveOrchestratorTarget(fromAgent);
+  // Guard: không trigger khi message rỗng tuyệt đối (tránh gửi rỗng về Orchestrator)
+  if (!existingReportId && isEmptyAgentOutput(message)) {
+    console.log(`[Route] Skip triggerOrchestrator: empty message from ${fromAgent.name} (${fromAgent.role})`);
+    return;
+  }
+  // Dedup: (fromAgent.id, nội dung CHUẨN HOÁ) đã trigger trong cửa sổ ~5s → bỏ qua, tránh Orchestrator
+  // nhận lặp cùng một báo cáo (UI nhân đôi bubble + orchestrator xử lý 2 lần).
+  if (!existingReportId) {
+    const dedupKey = `${fromAgent.id}|||${message.trim().replace(/\s+/g, ' ')}`;
+    const now = Date.now();
+    const lastAt = orchTriggerDedupAt.get(dedupKey);
+    if (lastAt !== undefined && now - lastAt < ORCH_TRIGGER_DEDUP_MS) {
+      console.log(`[Route] Skip duplicate orchestrator trigger from ${fromAgent.name} (dedup ${ORCH_TRIGGER_DEDUP_MS}ms)`);
+      return;
+    }
+    orchTriggerDedupAt.set(dedupKey, now);
+    if (orchTriggerDedupAt.size > 500) {
+      for (const [k, v] of orchTriggerDedupAt) {
+        if (now - v > ORCH_TRIGGER_DEDUP_MS) orchTriggerDedupAt.delete(k);
+      }
+    }
+  }
   const reportId = existingReportId || uuidv4();
   if (!existingReportId) {
     // Chỉ persist khi là report mới — replay sẽ tái dùng chính reportId cũ để không sinh bản trùng
@@ -1932,22 +2452,36 @@ async function processOrchestratorTriggerQueue() {
           });
         }
       }
-      // Display content giữ nguyên 100% — commands đã được extract/execute riêng bởi handleOrchestratorResponse
+      // Display content: bóc command tags, nếu có nội dung user-facing thì hiển thị trên UI
       const cleanUserContent = (result.content || '').trim().normalize('NFC');
 
       if (cleanUserContent) {
+        const userText = stripCommandTags(cleanUserContent).trim();
+        const isInternal = !userText;
         const orchMsg: ChatMsg = {
           id: uuidv4(),
           from: orchId,
           to: 'user',
-          content: cleanUserContent,
+          content: userText,
           timestamp: Date.now(),
           agentName: orchAgent.name || 'Orchestrator',
-          agentRole: 'orchestrator'
+          agentRole: 'orchestrator',
+          msgType: isInternal ? 'orchestrator_internal' : undefined,
+          showOnUI: !isInternal,
+          ...((result as any).thinking ? { thinking: (result as any).thinking } : {})
         };
-        chatHistory.push(orchMsg);
-        storage.saveMessage(orchMsg);
-        broadcast('chat:message', { msg: orchMsg });
+        // FIX DUP ORCHESTRATOR (Option A): nếu mọi agent trong batch này đều thuộc 1 batch đang
+        // chờ synthesis (checkAndSynthesize đã đánh dấu, synthesis sẽ broadcast summary 1.8s) →
+        // KHÔNG broadcast bubble per-report (tránh 2 message orchestrator→user cho cùng 1 batch).
+        // Vẫn giữ nguyên enqueue orchestrator ở trên (không mất điều phối/delivery), chỉ bỏ bubble UI.
+        const triggerAwaitingSynthesis = isBatchAwaitingSynthesis(batch.map(t => t.fromAgent.id));
+        if (!triggerAwaitingSynthesis && !isBroadcastDuplicate(broadcastDedupKey(orchMsg))) {
+          chatHistory.push(orchMsg);
+          storage.saveMessage(orchMsg);
+          broadcast('chat:message', { msg: orchMsg });
+        } else if (triggerAwaitingSynthesis) {
+          console.log(`[Orchestrator Trigger] Skip per-report bubble (batch chờ synthesis tổng hợp) — ${batch.map(t => t.fromAgent.name).join(', ')}`);
+        }
       }
       
       await handleOrchestratorResponse(result.content, (result as any).thinking || '');
@@ -1985,13 +2519,56 @@ function stripToolNoiseForOrchestrator(text: string): string {
     .trim();
 }
 
+// Kiểm tra khối report có ≥1 dòng KEY:/ JSON thực sự (không rỗng / không chỉ tag trần)
+function hasReportBody(text: string): boolean {
+  const body = (text || '').trim();
+  if (!body) return false;
+  // Loại bỏ thẻ mở/đóng thuần (VD === TASK REPORT === / === END REPORT === / <report>).
+  const stripped = body
+    .replace(/===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/gi, '')
+    .replace(/===\s*END[^=\n]*REPORT\s*===/gi, '')
+    .replace(/<\/?\s*(?:report|task_report|task-report|error_report|error-report)\s*>?/gi, '')
+    .trim();
+  if (!stripped) return false;
+  // Có ít nhất 1 dòng "KEY: value" (UPPER/Snake) hoặc JSON object → được xem là report thực.
+  return /^[A-Z][A-Z_0-9]*(?:\s*:)/mi.test(stripped) || /^\s*\{[\s\S]*\}/.test(stripped);
+}
+
 // Bóc tách CHỈ lấy khối Task Report sạch từ output của worker (bỏ toàn bộ lời tự sự/log phía trên).
-// Nếu không có marker thì trả nguyên văn (tin nhắn thường vẫn đi qua như cũ).
+// Hỗ trợ cả thẻ XML <report>...</report> lẫn cú pháp Bracket === TASK REPORT ===.
+// Tim marker REPORT ngoài code fence. Trả về { index } của marker thực đầu tiên,
+// bỏ qua literal marker nằm trong khối code (``` / backtick) hoặc attribute-đã-escaped.
+function findReportMarkerOutsideCode(text: string): number | undefined {
+  const fences = getCodeFenceRanges(text);
+  const isCoded = (idx: number) => {
+    for (const [s, e] of fences) if (idx >= s && idx < e) return true;
+    return false;
+  };
+  const re = /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (!isCoded(m.index)) return m.index;
+  }
+  return undefined;
+}
+
 function extractCleanTaskReport(content: string): string {
   const text = content || '';
-  const startMatch = text.match(/===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/i);
-  if (!startMatch || startMatch.index === undefined) return text;
-  const startIdx = startMatch.index;
+
+  // 0. Nếu marker xuất hiện TRONG code fence (literal ví dụ) → KHÔNG phải report thật,
+  // trả về text gốc để không bóc nhầm code sample thành report (hoặc cắt rỗng gốc).
+  const haveRealMarker = findReportMarkerOutsideCode(text) !== undefined;
+
+  // 1. Thẻ XML <report>...</report> (hoặc <task_report>, <error_report>)
+  // Chỉ chấp nhận khi có marker header thật ngoài code, hoặc thẻ XML xuất hiện ngoài code fence.
+  const xmlReportMatch = text.match(/<(?:\s*(?:report|task_report|task-report|error_report|error-report))\b[^>]*>([\s\S]*?)<\/\s*(?:report|task_report|task-report|error_report|error-report)\s*>/i);
+  if (xmlReportMatch && xmlReportMatch.index !== undefined && !isInCodeSpan(xmlReportMatch.index, getCodeFenceRanges(text))) {
+    return xmlReportMatch[0].trim();
+  }
+
+  // 2. Cú pháp Bracket === TASK REPORT === ... === END REPORT ===
+  const startIdx = findReportMarkerOutsideCode(text);
+  if (startIdx === undefined || !haveRealMarker) return text;
   let from = startIdx;
   // Giữ kèm dòng "Task complete." (hoặc "[TO: ...] Task complete.") ngay trước marker nếu có
   const before = text.slice(0, startIdx);
@@ -2000,23 +2577,35 @@ function extractCleanTaskReport(content: string): string {
   if (lastLineMatch) {
     from = beforeTrim.length - lastLineMatch[1].length;
   }
-  // Marker kết thúc tương ứng: === END <loại> REPORT ===
+  // Marker kết thúc tương ứng: === END <loại> REPORT === (tìm ngoài code fence nếu có thể)
   const afterStart = text.slice(startIdx);
-  const endM = afterStart.match(/===\s*END[^=\n]*REPORT\s*===/i);
-  const end = endM && endM.index !== undefined ? startIdx + endM.index + endM[0].length : text.length;
-  return text.slice(from, end).trim();
+  const fencesAfter = getCodeFenceRanges(afterStart);
+  const isCodedAfter = (idx: number) => {
+    for (const [s, e] of fencesAfter) if (idx >= s && idx < e) return true;
+    return false;
+  };
+  let end = text.length;
+  const endRe = /===\s*END[^=\n]*REPORT\s*===/gi;
+  let em: RegExpExecArray | null;
+  while ((em = endRe.exec(afterStart)) !== null) {
+    if (!isCodedAfter(em.index)) { end = startIdx + em.index + em[0].length; break; }
+  }
+  const report = text.slice(from, end).trim();
+  // Nếu khối report sau khi bóc chỉ còn tag/trống → KHÔNG nuốt thành <report>...</report> trống,
+  // trả về toàn bộ text gốc để fallback ở candidate xử lý.
+  return hasReportBody(report) ? report : text.trim();
 }
 
 // Deduplicate: track các nội dung broadcast gần đây (4s window) để tránh nhân đôi report
 async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo: string = 'orchestrator', toolCalls?: Array<{ tool: string; input?: string; output?: string }>, thinking?: string) {
   await parseAgentCommands(content, fromAgent.id);
   let messages = parseAgentOutput(content, defaultTo);
-  if (messages.length === 0 && content && content.trim()) {
-    const fallbackText = stripCommandTags(content).trim() || content.trim();
-    if (fallbackText) {
-      messages = [{ to: defaultTo, message: fallbackText }];
-    }
-  }
+if (messages.length === 0 && content && content.trim()) {
+     const fallbackText = content.trim();
+     if (fallbackText) {
+       messages = [{ to: defaultTo, message: fallbackText }];
+     }
+   }
 
   let hasOrchestratorMessage = false;
 
@@ -2027,9 +2616,16 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
     const targetOrchId = resolveOrchestratorTarget(fromAgent);
     const isToOrchestrator = msg.to === 'orchestrator' || msg.to === targetOrchId || (agents.get(msg.to)?.type === 'orchestrator');
     const resolvedTo = (msg.to === 'orchestrator') ? targetOrchId : msg.to;
-    const outContent = (isToOrchestrator || fromAgent.type === 'worker') && /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/i.test(msg.message)
-      ? extractCleanTaskReport(stripToolNoiseForOrchestrator(msg.message))
-      : (isToOrchestrator ? extractCleanTaskReport(stripToolNoiseForOrchestrator(msg.message)) : msg.message);
+    const cleanedForOrch = stripToolNoiseForOrchestrator(msg.message);
+    // Chỉ bóc tách Task Report khi message thực sự có header === REPORT === (hoặc nội bộ worker).
+    // Tránh nuốt content chứa literal thẻ XML <report>...</report> khi không có header báo cáo.
+    // Nếu report bóc ra bị rỗng/trống (chỉ còn tag) → fallback cleanedForOrch gốc.
+    const extractedReport = (isToOrchestrator || fromAgent.type === 'worker') && /===\s*(?:TASK|RESEARCH|VERIFICATION|ERROR)\s+REPORT\s*===/i.test(cleanedForOrch)
+      ? extractCleanTaskReport(cleanedForOrch)
+      : '';
+    const outContent = (extractedReport && extractedReport !== cleanedForOrch && hasReportBody(extractedReport))
+      ? extractedReport
+      : cleanedForOrch;
 
     const reply: ChatMsg = {
       id: uuidv4(),
@@ -2039,11 +2635,31 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
       timestamp: Date.now(),
       agentName: fromAgent.name,
       agentRole: fromAgent.role,
-      msgType: isInternal ? 'talk' : undefined
+      // msgType phản ánh NGƯỜI GỬI, không phải đích (fix arch-dbg):
+      // - orchestrator_internal CHỈ khi NGƯỜI GỬI là orchestrator (planning nội bộ, ẩn trong khung worker).
+      // - worker gửi báo cáo cho orchestrator dùng 'talk' (hoặc undefined nếu to user/broadcast) —
+      //   KHÔNG gán orchestrator_internal → trước đây ChatPanel L1954 (isOrchestratorInternal && !showOnUI)
+      //   ẩn mất báo cáo worker khỏi khung chat agent.
+      msgType:
+        fromAgent.type === 'orchestrator'
+          ? (isInternal ? 'orchestrator_internal' : undefined)
+          : (isInternal ? 'talk' : undefined),
+      ...(thinking ? { thinking } : {}),
+      // Gắn danh sách tool vào report để UI hiển thị đủ tool (edit/write/glob/grep...) —
+      // trước đây bị bỏ trong thân hàm dù call sites đã truyền → report mất tool list.
+      ...(toolCalls && toolCalls.length ? { toolCalls } : {})
     };
-    chatHistory.push(reply);
-    storage.saveMessage(reply);
-    broadcast('chat:message', { msg: reply });
+
+    // Dedup broadcast UI: khóa content-based (từ|đến|nội dung chuẩn hoá) —
+    // nếu bubble trùng nội dung đã xử lý/broadcast trong cửa sổ TTL → chỉ bỏ qua PUSH/BROADCAST UI
+    // (giữ nguyên route phía sau: triggerOrchestrator/deliverTalk vẫn chạy, không mất delivery).
+    if (!isBroadcastDuplicate(broadcastDedupKey(reply))) {
+      chatHistory.push(reply);
+      storage.saveMessage(reply);
+      broadcast('chat:message', { msg: reply });
+    } else {
+      console.log(`[Route] Skip duplicate broadcast bubble from ${fromAgent.name} -> ${resolvedTo} (dedup window, content-based)`);
+    }
 
     // Chặn turn thừa: nội dung rỗng tuyệt đối / "(No response)" đã hiển thị ở trên,
     // nhưng KHÔNG route tiếp (không trigger Orchestrator, không deliverTalk) → hết loop.
@@ -2053,18 +2669,24 @@ async function handleAgentResponse(content: string, fromAgent: Agent, defaultTo:
       continue;
     }
 
+    // Fallback chống "cắt rỗng": nếu bóc-tách report làm outContent rỗng/mất nội dung so với
+    // tin gốc → giữ nguyên message gốc (không gửi rỗng về Orchestrator, không mất delivery).
+    const safeOutContent = outContent && outContent.trim()
+      ? outContent
+      : (msg.message && msg.message.trim() ? msg.message : outContent);
+
     if (resolvedTo === 'orchestrator') {
       hasOrchestratorMessage = true;
       updateOrchStateSafe(resolvedTo, 'working', `Đang tiếp nhận & tổng kết báo cáo từ ${fromAgent.name}`);
       // Chuyển thẳng tin nhắn (đã lọc nhiễu tool) về Orchestrator không bị chặn
-      await triggerOrchestrator(fromAgent, outContent);
+      await triggerOrchestrator(fromAgent, safeOutContent);
     } else {
       const targetAgent = agents.get(resolvedTo) || findAgentByIdNameOrRole(resolvedTo);
       if (targetAgent) {
         if (targetAgent.type === 'orchestrator') {
           hasOrchestratorMessage = true;
           updateOrchStateSafe(resolvedTo, 'working', `Đang tiếp nhận & tổng kết báo cáo từ ${fromAgent.name}`);
-          await triggerOrchestrator(fromAgent, outContent);
+          await triggerOrchestrator(fromAgent, safeOutContent);
         } else {
           targetAgent.status = 'working';
           targetAgent.workingSince = Date.now();
@@ -2239,6 +2861,10 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
 
   // SPAWN scan gộp cả thinking/reasoning: tag có thể nằm trong phần model tự nói (không nằm
   // ở final text của opencode) — trước đây chỉ parse response nên spawn im lặng thất bại.
+  // extractBracketCommands (gọi bởi parseSpawnTags) skip tag nằm trong fenced/inline code/report/
+  // quoted attrs qua getCodeSpanRanges + isInCodeSpan → dùng raw text an toàn, không cần sanitize.
+  // Tag trong blockquote mô tả (target/role placeholder) sẽ lọt parse nhưng bị bỏ qua im lặng vì
+  // cleanTargetIdentifier không tìm thấy agent / parseSpawnCommand trả null — không thành lệnh thật.
   const scanText = response + '\n' + (extraScanText || '');
   const spawns = parseSpawnTags(scanText);
   
@@ -2340,7 +2966,7 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
 
       if (activeRoleAgents.length >= roleLimit) {
         const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
-        const errorContent = `[Role Limit] Không thể spawn agent "${name}" role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng [TALK agent-id=... message=...] để giao việc.`;
+        const errorContent = `[Role Limit] Không thể spawn agent "${name}" role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng <talk target="...">...</talk> hoặc [TALK agent-id=... message=...] để giao việc.`;
         console.warn(`[Role Limit] ${errorContent}`);
         commandResults.push(errorContent);
 
@@ -2443,6 +3069,10 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
     }
   }
   
+  // parseOrchestratorCommands → extractBracketCommands skip tag trong fenced/inline code/report/
+  // quoted attrs qua getCodeSpanRanges + isInCodeSpan → dùng raw response giữ nguyên path/code
+  // backtick trong message talk (không blank). Tag trong blockquote có target placeholder lọt parse
+  // nhưng cleanTargetIdentifier không tìm thấy agent → bỏ qua im lặng (L3008-3010).
   const talks = parseOrchestratorCommands(response);
   for (const talk of talks) {
     const { agentId, message, task } = talk;
@@ -2633,7 +3263,7 @@ app.post('/api/agents', async (req, res) => {
 
     if (activeRoleAgents.length >= roleLimit) {
       const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
-      const errorMsg = `[Role Limit] Không thể tạo agent role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng [TALK agent-id=... message=...] để giao việc.`;
+      const errorMsg = `[Role Limit] Không thể tạo agent role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng <talk target="...">...</talk> hoặc [TALK agent-id=... message=...] để giao việc.`;
       console.warn(`[API /api/agents] ${errorMsg}`);
       
       // Gửi tin nhắn lỗi về Main Orchestrator
@@ -3011,20 +3641,35 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
   const response = result.content;
   if (targetAgent) {
     if (isSlashCommand) {
+      let chatContent = response;
+      let isInternal = false;
+      if (targetAgent.role === 'orchestrator') {
+        const stripped = stripCommandTags(response).trim();
+        if (stripped) {
+          chatContent = stripped;
+          isInternal = false;
+        } else {
+          isInternal = true;
+        }
+      }
       const reply: ChatMsg = {
         id: uuidv4(),
         from: targetAgent.id,
         to: 'user',
-        content: response,
+        content: chatContent,
+        msgType: isInternal ? 'orchestrator_internal' : undefined,
+        showOnUI: !isInternal,
         timestamp: Date.now(),
         agentName: targetAgent.name,
         agentRole: targetAgent.role,
         ...(result.toolCalls && result.toolCalls.length ? { toolCalls: result.toolCalls } : {}),
         ...(result.thinking ? { thinking: result.thinking } : {})
       };
-      chatHistory.push(reply);
-      storage.saveMessage(reply);
-      broadcast('chat:message', { msg: reply });
+      if (!isBroadcastDuplicate(broadcastDedupKey(reply))) {
+        chatHistory.push(reply);
+        storage.saveMessage(reply);
+        broadcast('chat:message', { msg: reply });
+      }
     } else {
       const messages = parseAgentOutput(response, 'user');
       let hasExplicitTo = false;
@@ -3044,20 +3689,36 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         }
         await handleAgentResponse(response, targetAgent, 'user', result.toolCalls, result.thinking);
       } else {
+        let chatContent = response;
+        let isInternal = false;
+        if (targetAgent.role === 'orchestrator') {
+          const stripped = stripCommandTags(response).trim();
+          if (stripped) {
+            chatContent = stripped;
+            isInternal = false;
+          } else {
+            chatContent = '';
+            isInternal = true;
+          }
+        }
         const reply: ChatMsg = {
           id: uuidv4(),
           from: targetAgent.id,
           to: 'user',
-          content: response,
+          content: chatContent,
+          msgType: isInternal ? 'orchestrator_internal' : undefined,
+          showOnUI: !isInternal,
           timestamp: Date.now(),
           agentName: targetAgent.name,
           agentRole: targetAgent.role,
           ...(result.toolCalls && result.toolCalls.length ? { toolCalls: result.toolCalls } : {}),
-        ...(result.thinking ? { thinking: result.thinking } : {}),
+          ...(result.thinking ? { thinking: result.thinking } : {})
         };
-        chatHistory.push(reply);
-        storage.saveMessage(reply);
-        broadcast('chat:message', { msg: reply });
+        if (!isBroadcastDuplicate(broadcastDedupKey(reply))) {
+          chatHistory.push(reply);
+          storage.saveMessage(reply);
+          broadcast('chat:message', { msg: reply });
+        }
 
         // AUTO-WAKE ORCHESTRATOR: worker 1-1 vừa xong việc kèm báo cáo (mọi biến thể)
         // → đánh thức Orchestrator phân tích & tổng hợp trả lời cho user ngay lập tức.
@@ -3078,31 +3739,48 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     broadcast('agent:updated', { agent: targetAgent });
   } else {
     if (isSlashCommand) {
+      const stripped = stripCommandTags(response).trim();
+      const isInternal = !stripped;
       const aMsg: ChatMsg = {
         id: uuidv4(),
         from: 'orchestrator',
         to: 'user',
-        content: response,
+        content: stripped,
         timestamp: Date.now(),
         agentName: 'Orchestrator',
-        agentRole: 'orchestrator'
+        agentRole: 'orchestrator',
+        msgType: isInternal ? 'orchestrator_internal' : undefined,
+        showOnUI: !isInternal,
+...(result.thinking ? { thinking: result.thinking } : {})
       };
-      chatHistory.push(aMsg);
-      storage.saveMessage(aMsg);
-      broadcast('chat:message', { msg: aMsg });
+      if (!isBroadcastDuplicate(broadcastDedupKey(aMsg))) {
+        chatHistory.push(aMsg);
+        storage.saveMessage(aMsg);
+        broadcast('chat:message', { msg: aMsg });
+      }
     } else {
-      const commandResultsParse = await handleOrchestratorResponse(response, result.thinking || '');
-      commandResults.push(...commandResultsParse);
-      // Display content giữ nguyên 100% — commands đã được extract/execute riêng
-      const cleanResponse = (response || '').trim();
+      // SỬA THỨ TỰ HIỂN THỊ: bóc nội dung user-facing TRƯỚC rồi push/broadcast aMsg text→user
+      // LÊN TRƯỚC, SAU ĐÓ mới chạy handleOrchestratorResponse (push spawn/talk msg → agent vào history).
+      // Trước đây handleOrchestratorResponse chạy trước → UI hiện task-card (talk) trước text, ngược
+      // logic. Giờ thứ tự persist: [text-user, talk-a, talk-b, ...] — text hiện lên trước.
+      // stripped/toolCalls/thinking độc lập với kết quả của handleOrchestratorResponse nên an toàn.
+      const stripped = stripCommandTags(response).trim();
+      const isInternal = !stripped;
       const aMsg: ChatMsg = {
-        id: uuidv4(), from: 'orchestrator', to: 'user', content: cleanResponse || response,
+        id: uuidv4(), from: 'orchestrator', to: 'user', content: stripped,
         timestamp: Date.now(), agentName, agentRole,
+        msgType: isInternal ? 'orchestrator_internal' : undefined,
+        showOnUI: !isInternal,
         ...(result.toolCalls && result.toolCalls.length ? { toolCalls: result.toolCalls } : {}),
         ...(result.thinking ? { thinking: result.thinking } : {})
       };
-      chatHistory.push(aMsg); storage.saveMessage(aMsg);
-      broadcast('chat:message', { msg: aMsg });
+      if (!isBroadcastDuplicate(broadcastDedupKey(aMsg))) {
+        chatHistory.push(aMsg); storage.saveMessage(aMsg);
+        broadcast('chat:message', { msg: aMsg });
+      }
+      // Chạy sau khi đã persist/broadcast text-user để các spawn/talk msg đứng sau text.
+      const commandResultsParse = await handleOrchestratorResponse(response, result.thinking || '');
+      commandResults.push(...commandResultsParse);
     }
     const orchId = resolvedTargetId || 'orchestrator';
     updateOrchStateSafe(orchId, 'idle', 'Sẵn sàng');
@@ -3259,8 +3937,8 @@ app.post('/api/chat', async (req, res) => {
       return;
     }
 
-    // Xử lý thông báo tức thời cho lệnh /compact
-    if (rawMsg.toLowerCase().startsWith('/compact')) {
+    // Xử lý thông báo tức thời cho lệnh /compact (chỉ kích hoạt khi là lệnh đứng độc lập)
+    if (/^\s*\/compact\s*$/i.test(rawMsg)) {
       const compactNotice: ChatMsg = {
         id: uuidv4(),
         from: 'system',
@@ -3273,6 +3951,56 @@ app.post('/api/chat', async (req, res) => {
       chatHistory.push(compactNotice);
       storage.saveMessage(compactNotice);
       broadcast('chat:message', { msg: compactNotice });
+
+      try {
+        const client = targetAgent ? getClient(targetAgent) : null;
+        const sid = client?.getSessionId() || targetAgent?.sessionId;
+        if (!sid) {
+          const errMsg: ChatMsg = {
+            id: uuidv4(),
+            from: 'system',
+            to: 'user',
+            content: '⚠️ Không thể thực hiện /compact: chưa có sessionId đang hoạt động.',
+            timestamp: Date.now(),
+            agentName: 'System',
+            agentRole: 'system'
+          };
+          chatHistory.push(errMsg); storage.saveMessage(errMsg);
+          broadcast('chat:message', { msg: errMsg });
+          if (!res.headersSent) res.json({ ok: false, error: 'no_active_session' });
+          return;
+        }
+
+        const ok = client ? await client.compactSession(sid) : false;
+        const doneMsg: ChatMsg = {
+          id: uuidv4(),
+          from: 'system',
+          to: 'user',
+          content: ok ? '✅ Đã rút gọn ngữ cảnh (/compact) thành công.' : '❌ Rút gọn ngữ cảnh (/compact) thất bại hoặc không thể kết nối OpenCode Serve.',
+          timestamp: Date.now(),
+          agentName: 'System',
+          agentRole: 'system'
+        };
+        chatHistory.push(doneMsg); storage.saveMessage(doneMsg);
+        broadcast('chat:message', { msg: doneMsg });
+        if (!res.headersSent) res.json({ ok, sessionId: sid, compacted: ok });
+        return;
+      } catch (err: any) {
+        const failMsg: ChatMsg = {
+          id: uuidv4(),
+          from: 'system',
+          to: 'user',
+          content: `❌ Lỗi /compact: ${err?.message || err}`,
+          timestamp: Date.now(),
+          agentName: 'System',
+          agentRole: 'system',
+          msgType: 'error'
+        };
+        chatHistory.push(failMsg); storage.saveMessage(failMsg);
+        broadcast('chat:message', { msg: failMsg });
+        if (!res.headersSent) res.json({ ok: false, error: err?.message || 'compact_failed' });
+        return;
+      }
     }
 
     const { response, sid, commands: commandResults } = await dispatchUserChat({ targetAgentId: resolvedTargetId, rawMsg, isSlashCommand, isRetry: false });
@@ -3431,6 +4159,20 @@ app.post('/api/settings/watchdog', (req, res) => {
   storage.setSetting('enableWatchdog', enabled);
   broadcast('settings:updated', { enableWatchdog: enabled });
   res.json({ success: true, enableWatchdog: enabled });
+});
+
+// Auto Continue: trả đúng giá trị đang lưu (khác watchdog vốn luôn false) vì cần
+// khôi phục state toggle sau mỗi lần mở app.
+app.get('/api/settings/autoContinue', (_req, res) => {
+  res.json({ autoContinue: storage.getSetting('autoContinue', false) === true });
+});
+
+app.post('/api/settings/autoContinue', (req, res) => {
+  const { autoContinue } = req.body || {};
+  const enabled = Boolean(autoContinue);
+  storage.setSetting('autoContinue', enabled);
+  broadcast('settings:updated', { autoContinue: enabled });
+  res.json({ success: true, autoContinue: enabled });
 });
 
 app.get('/api/settings/models', (_req, res) => {
@@ -3730,10 +4472,9 @@ app.get('/assets/*', (req, res) => {
   res.type(MIME_MAP[ext] || 'application/octet-stream').send(buf);
 });
 
+// Mặc định mở React UI đầy đủ: redirect / → /v2 (user muốn mở mặc định thấy giao diện đầy đủ).
 app.get('/', (_req, res) => {
-  const buf = readFileStatic(join('dist', 'index.html'));
-  if (!buf) { res.status(500).send('Legacy HTML not found'); return; }
-  res.type('html').send(buf.toString('utf-8'));
+  res.redirect(302, '/v2');
 });
 app.get(['/v2', '/v2/*'], (_req, res) => {
   const buf = readFileStatic(join('web', 'dist', 'index.html'));
@@ -3867,6 +4608,38 @@ process.on('SIGTERM', () => {
 
 // Khi khởi động lại (sau mất điện / crash): gửi lại mọi report còn pending trong outbox DB.
 // Reset attempts về 0 để mỗi lần chạy lại đều thử gửi lại (đúng ý người dùng: "chạy lại thì gửi lại").
+// Auto Continue: sau khi replay outbox, quét các agent còn kẹt status='working' (đã giữ lại ở loadState
+// nhờ autoContinue) rồi gửi dấu '.' qua deliverTalk để agent tiếp tục task dở — không cần user thao tác lại.
+async function autoResumeWorkingAgents() {
+  try {
+    if (storage.getSetting('autoContinue', false) !== true) return;
+    const orchAgent = agents.get('orchestrator');
+    if (!orchAgent) return;
+    const stuck: Agent[] = [];
+    for (const a of agents.values()) {
+      if (a.id === 'orchestrator') continue;
+      if (a.status === 'working' && a.task && String(a.task).trim() !== '') {
+        stuck.push(a);
+      }
+    }
+    if (stuck.length === 0) {
+      console.log('[AutoContinue] No stuck working agent to resume.');
+      return;
+    }
+    console.log(`[AutoContinue] Resuming ${stuck.length} working agent(s): ${stuck.map(a => a.name).join(', ')}`);
+    for (const a of stuck) {
+      try {
+        await deliverTalk(a, orchAgent, { to: a.id, message: '.', task: a.task });
+        console.log(`[AutoContinue] Pinged ${a.name} (${a.id}) to continue task.`);
+      } catch (e: any) {
+        console.error(`[AutoContinue] Failed to ping ${a.name}: ${e.message}`);
+      }
+    }
+  } catch (e: any) {
+    console.error(`[AutoContinue] autoResumeWorkingAgents error: ${e.message}`);
+  }
+}
+
 async function replayPendingReports() {
   const pending = storage.getPendingOutbox();
   if (pending.length === 0) return;
@@ -3973,6 +4746,7 @@ function startServerWithPortFallback(port: number) {
     // Sau 1s để orchestrator client kịp init trước khi replay
     setTimeout(() => {
       replayPendingReports().catch(e => console.error(`[Outbox] Replay failed: ${e.message}`));
+      autoResumeWorkingAgents().catch(e => console.error(`[AutoContinue] Resume failed: ${e.message}`));
       processChatRetryQueue().catch(e => console.error(`[ChatQueue] Replay failed: ${e.message}`));
       scheduleChatRetry();
     }, 1000);

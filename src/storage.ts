@@ -50,9 +50,10 @@ const DATA_DIR = join(PROJECT_ROOT_STORAGE, 'data');
 const STATE_FILE = join(DATA_DIR, 'agentforge-state.json');
 const BAK_FILE = join(DATA_DIR, 'agentforge-state.json.bak');
 
-// Cap lưu trữ lịch sử chat (in-memory + persist). Yêu cầu user: tối thiểu 15.000 tin.
+// Cap lưu trữ lịch sử chat (in-memory + persist).
+// Hỗ trợ không giới hạn (Unlimited): giữ toàn bộ tin nhắn, không cắt bớt.
 // Ghi đĩa vẫn dùng atomicWriteFile + .bak sẵn có nên an toàn mất điện/restart.
-export const MAX_PERSISTED_MESSAGES = 15000;
+export const MAX_PERSISTED_MESSAGES = Infinity;
 
 // Ensure data dir exists
 mkdirSync(DATA_DIR, { recursive: true });
@@ -166,11 +167,15 @@ function loadStateFromDisk() {
   // 3. Populate in-memory structures
   if (loadedState) {
     inMemoryAgents.clear();
+    const loadedSettings = (loadedState as any).settings || {};
+    const autoContinue = loadedSettings.autoContinue === true;
     for (const a of loadedState.agents) {
       if (a && a.id) {
         // Process cũ đã chết khi restart: agent còn kẹt status='working' phải trả về 'idle'
         // để badge không treo vàng mãi (không còn tiến trình nào đang chạy nữa).
-        if (a.status === 'working') {
+        // TRỪ KHI bật Auto Continue → giữ 'working' + workingSince để startup
+        // autoResumeWorkingAgents() ping '.' tiếp tục task dở.
+        if (a.status === 'working' && !autoContinue) {
           a.status = 'idle';
           a.workingSince = undefined;
         }
@@ -178,7 +183,7 @@ function loadStateFromDisk() {
       }
     }
     inMemoryHistory = loadedState.history;
-    inMemorySettings = (loadedState as any).settings || {};
+    inMemorySettings = loadedSettings;
     inMemoryOutbox = loadedState.outbox || [];
     inMemoryChatQueue = (loadedState as any).chatQueue || [];
     inMemoryUnprocessedUserMessages = (loadedState as any).unprocessedUserMessages || {};
@@ -244,7 +249,7 @@ function writeStateSync() {
   try {
     const data: StorageSchema = {
       agents: Array.from(inMemoryAgents.values()),
-      history: inMemoryHistory.slice(-MAX_PERSISTED_MESSAGES),
+      history: Number.isFinite(MAX_PERSISTED_MESSAGES) ? inMemoryHistory.slice(-MAX_PERSISTED_MESSAGES) : inMemoryHistory,
       settings: inMemorySettings,
       outbox: inMemoryOutbox.slice(-500),
       chatQueue: inMemoryChatQueue.slice(-200),
@@ -361,12 +366,37 @@ export const storage = {
 
   saveMessage(msg: any) {
     inMemoryHistory.push({ ...msg });
-    if (inMemoryHistory.length > MAX_PERSISTED_MESSAGES) inMemoryHistory.shift();
+    if (Number.isFinite(MAX_PERSISTED_MESSAGES) && inMemoryHistory.length > MAX_PERSISTED_MESSAGES) {
+      inMemoryHistory.shift();
+    }
     schedulePersist();
   },
 
-  getHistory(limit = 200) {
-    return inMemoryHistory.slice(-limit);
+  // UPSERT 1 snapshot opencode mới nhất/agent: xóa bản opencode cũ cùng `from` trước khi push.
+  // Tránh phình vô hạn (MAX_PERSISTED_MESSAGES=Infinity) khi mỗi batch event tạo 1 snapshot mới.
+  // MERGE thinking/toolCalls: nếu bản mới rỗng mà bản cũ có → giữ bản cũ (kịch bản thinking→text).
+  // LƯU Ý parts (Option C): KHÔNG nối tại đây — server đã merge/nối parts vào mergedMsg trước khi
+  // gọi (server.ts). Nếu nối thêm ở đây sẽ NHÂN ĐÔI segments. Storage chỉ giữ nguyên msg.parts.
+  saveOpenCodeSnapshot(msg: any) {
+    const from = msg?.from;
+    if (from) {
+      // Tìm bản opencode cũ trước khi filter
+      const prev = inMemoryHistory.find(m => m.msgType === 'opencode' && (m.from === from || m.from_id === from));
+      if (prev) {
+        if ((!msg.thinking || !String(msg.thinking).trim()) && prev.thinking) msg.thinking = prev.thinking;
+        if ((!msg.toolCalls || !msg.toolCalls.length) && prev.toolCalls?.length) msg.toolCalls = prev.toolCalls;
+      }
+      inMemoryHistory = inMemoryHistory.filter(m => !(m.msgType === 'opencode' && (m.from === from || m.from_id === from)));
+    }
+    inMemoryHistory.push({ ...msg });
+    schedulePersist();
+  },
+
+  getHistory(limit?: number) {
+    if (typeof limit === 'number' && limit > 0) {
+      return inMemoryHistory.slice(-limit);
+    }
+    return inMemoryHistory;
   },
 
   // ============ REPORT OUTBOX (durable queue for agent reports) ============
@@ -524,8 +554,11 @@ export const storage = {
     return Array.from(inMemoryAgents.values());
   },
 
-  loadHistory(limit = 200): any[] {
-    return inMemoryHistory.slice(-limit);
+  loadHistory(limit?: number): any[] {
+    if (typeof limit === 'number' && limit > 0) {
+      return inMemoryHistory.slice(-limit);
+    }
+    return inMemoryHistory;
   },
 
   getSetting(key: string, defaultValue?: any) {

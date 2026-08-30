@@ -9,6 +9,7 @@ interface Agent {
   task?: string;
   sessionTitle?: string;
   model?: string;
+  spawnedBy?: string;
   tokenUsage?: number | { totalTokens?: number; total?: number; inputTokens?: number; outputTokens?: number; cost?: number };
   contextLength?: number;
 }
@@ -53,8 +54,8 @@ const getRoleIcon = (role?: string): string => {
 const renderStatusBadge = (status: string) => {
   const isWorking = status === 'working';
   const isError = status === 'error';
-  const dotColor = isWorking ? '#22c55e' : isError ? '#ef4444' : '#64748b';
-  const textCol = isWorking ? '#4ade80' : isError ? '#f87171' : '#94a3b8';
+  const dotColor = isWorking ? 'var(--wb-success-strong)' : isError ? 'var(--wb-danger-strong)' : 'var(--wb-muted)';
+  const textCol = isWorking ? 'var(--wb-success-strong)' : isError ? 'var(--wb-danger)' : 'var(--text-muted)';
   const bgCol = isWorking ? 'rgba(34, 197, 94, 0.15)' : isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(100, 116, 139, 0.15)';
   const borderCol = isWorking ? 'rgba(34, 197, 94, 0.35)' : isError ? 'rgba(239, 68, 68, 0.35)' : 'rgba(100, 116, 139, 0.25)';
 
@@ -185,7 +186,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
             title="Tạo thêm Orchestrator / Team mới"
             style={{
               background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%)',
-              color: '#c4b5fd',
+              color: 'var(--wb-purple)',
               border: '1px solid rgba(139, 92, 246, 0.35)',
               borderRadius: 9999,
               padding: '0 10px',
@@ -215,7 +216,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
           <button
             onClick={() => onSpawn()}
             style={{
-              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+              background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)',
               color: 'white',
               border: 'none',
               borderRadius: 9999,
@@ -282,8 +283,8 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                   background: isOrchSelected ? 'var(--bg-card-active)' : 'var(--bg-card)',
                   borderRadius: 8,
                   padding: '9px 11px',
-                  border: isOrchSelected ? '1px solid var(--accent)' : '1px solid var(--af-border)',
-                  boxShadow: isOrchSelected ? '0 0 14px -2px var(--accent-soft)' : 'none',
+                  border: isOrchSelected ? '2px solid var(--accent-strong)' : '1px solid var(--af-border)',
+                  boxShadow: isOrchSelected ? '0 0 24px -2px var(--accent)' : 'none',
                   cursor: 'pointer',
                   width: '100%',
                   maxWidth: '100%',
@@ -325,7 +326,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                         style={{
                           background: 'transparent',
                           border: 'none',
-                          color: '#f87171',
+                          color: 'var(--wb-danger)',
                           cursor: 'pointer',
                           padding: '2px 4px',
                           fontSize: 11,
@@ -333,8 +334,8 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                           borderRadius: 4,
                           transition: 'color 0.15s'
                         }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = '#f87171'; }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--wb-danger-strong)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--wb-danger)'; }}
                       >
                         ✕
                       </button>
@@ -421,7 +422,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                   <span
                     style={{
                       fontSize: 10.5,
-                      color: '#38bdf8',
+                      color: 'var(--wb-info)',
                       background: 'rgba(56, 189, 248, 0.12)',
                       padding: '2px 6px',
                       borderRadius: 4,
@@ -439,7 +440,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                 {orch.sessionTitle && (
                   <div style={{
                     fontSize: 11,
-                    color: '#a5b4fc',
+                    color: 'var(--wb-purple)',
                     background: 'rgba(99, 102, 241, 0.08)',
                     padding: '2px 6px',
                     borderRadius: 4,
@@ -467,11 +468,11 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                   {childWorkers.length === 0 ? (
                     <div style={{
                       fontSize: 12,
-                      color: '#64748b',
+                      color: 'var(--wb-muted)',
                       padding: '10px 12px',
                       background: 'rgba(15, 23, 42, 0.4)',
                       borderRadius: 8,
-                      border: '1px dashed #334155',
+                      border: '1px dashed var(--af-border-strong)',
                       textAlign: 'center'
                     }}>
                       Chưa có worker nào trong workspace này.
@@ -501,8 +502,8 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                             background: isSelected ? 'var(--bg-card-active)' : 'var(--bg-card)',
                             borderRadius: 10,
                             padding: 12,
-                            border: isSelected ? '1px solid var(--accent)' : '1px solid var(--af-border)',
-                            boxShadow: isSelected ? '0 0 16px -2px var(--accent-soft)' : 'none',
+                            border: isSelected ? '2px solid var(--accent-strong)' : '1px solid var(--af-border)',
+                            boxShadow: isSelected ? '0 0 24px -2px var(--accent)' : 'none',
                             cursor: 'pointer'
                           }}
                         >
@@ -525,7 +526,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                                   <span
                                     style={{
                                       fontSize: 11,
-                                      color: '#38bdf8',
+                                      color: 'var(--wb-info)',
                                       background: 'rgba(56, 189, 248, 0.12)',
                                       padding: '1px 6px',
                                       borderRadius: 4,
@@ -556,7 +557,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                                   }}>
                                     {agent.role}
                                   </span>
-                                  <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+                                  <span style={{ fontSize: 11, color: 'var(--wb-muted)', fontFamily: 'monospace' }}>
                                     {agent.id}
                                   </span>
                                 </div>
@@ -577,15 +578,15 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                                   style={{
                                     background: 'transparent',
                                     border: 'none',
-                                    color: '#64748b',
+                                    color: 'var(--wb-muted)',
                                     cursor: 'pointer',
                                     padding: '2px 4px',
                                     fontSize: 13,
                                     borderRadius: 4,
                                     transition: 'color 0.2s'
                                   }}
-                                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#ef4444'; }}
-                                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#64748b'; }}
+                                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--wb-danger-strong)'; }}
+                                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--wb-muted)'; }}
                                 >
                                   ✕
                                 </button>
@@ -596,7 +597,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                           {agent.sessionTitle && (
                             <div style={{
                               fontSize: 12,
-                              color: '#34d399',
+                              color: 'var(--wb-success-strong)',
                               background: 'rgba(16, 185, 129, 0.1)',
                               padding: '3px 8px',
                               borderRadius: 4,

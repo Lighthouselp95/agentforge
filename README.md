@@ -70,6 +70,33 @@ open http://localhost:3001/v2
 ```
 Oneshot run at: Agentforge-web.exe release
 
+## Hướng dẫn build exe
+
+Để đóng gói AgentForge thành desktop app (Windows executable), sử dụng lệnh:
+
+```bash
+npm run build:exe
+```
+
+Lệnh này tự động chạy:
+1. **TypeScript compiler** (`tsc`) — kiểm tra lỗi static.
+2. **Vite build** — bundle frontend React (`web/`) vào `dist/`.
+3. **Electron/SEA** — nhúng web bundle vào Node.js SEA (Single Executable Application).
+
+Output: file `.exe` tại `release/agentforge-web.exe` (~95 MB, tùy version).
+
+Đặt tên file theo quy ước:
+- `agentforge-web-build-vN.exe` — bản thường (app thường).
+- `agentforge-web-build-vN-serve.exe` — bản serve (chạy server mode, không GUI).
+
+**Yêu cầu:**
+- Node.js 18+
+- npm dependencies đã cài (`npm install && cd web && npm install`)
+
+**Lưu ý khi build song song 2 repo (forge + serve):**
+- Cả 2 repo PHẢI có cùng SHA-256 cho từng file source (parity).
+- Build xong: kiểm tra SHA file `.exe` khớp giữa release/ và bản copy.
+
 ## Usage
 
 0. **UI routes**:
@@ -92,6 +119,4 @@ Oneshot run at: Agentforge-web.exe release
 
 - [Agent Lifecycle & Injection Protocol](docs/AGENT_LIFECYCLE.md): Chi tiết về vòng đời agent, luồng dừng/hủy tiến trình và thông điệp hệ thống `[STOPPED]`.
 
-## Agent Prompts
 
-Agent system prompts live in `.opencode/agents/*.md` (coder, tester, reviewer, docs, planner, researcher, verifier, debugger, searcher, orchestrator). Loaded by OpenCode via `--agent <role>` at spawn time. Orchestrator must NOT use OpenCode's native subagent/task system — it only outputs text commands (`[SPAWN]`, `[TALK]`, `[STOP]`, `[DELETE]`, `[CREATE ROLE]`).

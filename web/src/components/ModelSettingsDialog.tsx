@@ -157,26 +157,26 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
       zIndex: 1000
     }}>
       <div className="fade-in af-dialog-box" style={{
-        background: '#0f172a',
+        background: 'var(--bg-panel)',
         borderRadius: 16,
         padding: 24,
         width: 600,
         maxWidth: '92vw',
         maxHeight: '90vh',
         overflow: 'auto',
-        border: '1px solid #334155',
+        border: '1px solid var(--af-border-strong)',
         boxShadow: '0 20px 45px rgba(0,0,0,0.6)',
         display: 'flex',
         flexDirection: 'column',
         gap: 16
       }}>
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1e293b', paddingBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--bg-inset)', paddingBottom: 12 }}>
           <div>
-            <h3 style={{ margin: 0, fontSize: 16, color: '#f8fafc', fontWeight: 700, letterSpacing: '-0.01em' }}>
+            <h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-primary)', fontWeight: 700, letterSpacing: '-0.01em' }}>
               ⚙️ Cấu hình Phân cấp Model (Model Hierarchy)
             </h3>
-            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
               Thứ tự ưu tiên: Instance Override → Role Override → Default Subagent Model → System Default
             </div>
           </div>
@@ -185,7 +185,7 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#94a3b8',
+              color: 'var(--text-muted)',
               fontSize: 16,
               cursor: 'pointer',
               padding: 4
@@ -196,23 +196,23 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
         </div>
 
         {loading ? (
-          <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+          <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
             ⏳ Đang tải danh sách model và cấu hình...
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* 1. Global Hierarchy Settings */}
-            <div style={{ background: '#1e293b', borderRadius: 10, padding: 14, border: '1px solid #334155' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#60a5fa', marginBottom: 12 }}>
+            <div style={{ background: 'var(--bg-inset)', borderRadius: 10, padding: 14, border: '1px solid var(--af-border-strong)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', marginBottom: 12 }}>
                 🌐 Model Cốt lõi & Mặc định
               </div>
 
               {/* Orchestrator Model */}
               <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#f1f5f9', display: 'block', marginBottom: 4 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
                   👑 Orchestrator Model (Model điều phối chính)
                 </label>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
                   Dùng để tiếp nhận yêu cầu từ người dùng, lập kế hoạch và điều phối các worker.
                 </div>
                 <select
@@ -220,9 +220,9 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
                   onChange={(e) => setOrchestratorModel(e.target.value)}
                   style={{
                     width: '100%',
-                    background: '#0f172a',
-                    color: '#f8fafc',
-                    border: '1px solid #334155',
+                    background: 'var(--bg-panel)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--af-border-strong)',
                     borderRadius: 8,
                     padding: '8px 10px',
                     fontSize: 12,
@@ -238,10 +238,10 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
 
               {/* Default Subagent Model */}
               <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#f1f5f9', display: 'block', marginBottom: 4 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
                   👥 Default Subagent Model (Model chung cho Workers)
                 </label>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
                   Các worker / subagent sẽ tự động kế thừa model này nếu không có cấu hình riêng.
                 </div>
                 <select
@@ -249,9 +249,9 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
                   onChange={(e) => setDefaultSubagentModel(e.target.value)}
                   style={{
                     width: '100%',
-                    background: '#0f172a',
-                    color: '#f8fafc',
-                    border: '1px solid #334155',
+                    background: 'var(--bg-panel)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--af-border-strong)',
                     borderRadius: 8,
                     padding: '8px 10px',
                     fontSize: 12,
@@ -267,11 +267,11 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
             </div>
 
             {/* 2. Role Overrides */}
-            <div style={{ background: '#1e293b', borderRadius: 10, padding: 14, border: '1px solid #334155' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#34d399', marginBottom: 4 }}>
+            <div style={{ background: 'var(--bg-inset)', borderRadius: 10, padding: 14, border: '1px solid var(--af-border-strong)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--wb-success-strong)', marginBottom: 4 }}>
                 🎭 Ghi đè Model theo Role (Role Overrides)
               </div>
-              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
                 Tối ưu hóa model phù hợp theo tính chất từng vai trò.
               </div>
 
@@ -279,19 +279,19 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
                 {STANDARD_ROLES.map(r => {
                   const currentModel = getRoleModel(r.value);
                   return (
-                    <div key={r.value} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#0f172a', padding: '8px 10px', borderRadius: 8, border: '1px solid #334155' }}>
+                    <div key={r.value} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-panel)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--af-border-strong)' }}>
                       <div style={{ flex: 1, paddingRight: 10 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: '#f8fafc' }}>{r.label}</div>
-                        <div style={{ fontSize: 10, color: '#94a3b8' }}>{r.desc}</div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{r.label}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{r.desc}</div>
                       </div>
                       <select
                         value={currentModel}
                         onChange={(e) => handleRoleOverrideChange(r.value, e.target.value)}
                         style={{
                           width: 220,
-                          background: currentModel ? '#1e3a8a' : '#1e293b',
-                          color: '#f8fafc',
-                          border: currentModel ? '1px solid #3b82f6' : '1px solid #334155',
+                          background: currentModel ? 'var(--accent-strong)' : 'var(--bg-inset)',
+                          color: 'var(--text-primary)',
+                          border: currentModel ? '1px solid var(--accent)' : '1px solid var(--af-border-strong)',
                           borderRadius: 6,
                           padding: '6px 8px',
                           fontSize: 11,
@@ -311,32 +311,32 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
 
             {/* 3. Active Agent Overrides */}
             {workerAgents.length > 0 && (
-              <div style={{ background: '#1e293b', borderRadius: 10, padding: 14, border: '1px solid #334155' }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24', marginBottom: 4 }}>
+              <div style={{ background: 'var(--bg-inset)', borderRadius: 10, padding: 14, border: '1px solid var(--af-border-strong)' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--wb-warn)', marginBottom: 4 }}>
                   🎯 Ghi đè theo Instance Agent Đang chạy
                 </div>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
                   Cài đặt model riêng cho từng thực thể agent đang hoạt động.
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 180, overflowY: 'auto', paddingRight: 4 }}>
                   {workerAgents.map(a => {
                     const currentModel = a.model || getAgentModel(a.id);
                     return (
-                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#0f172a', padding: '8px 10px', borderRadius: 8, border: '1px solid #334155' }}>
+                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-panel)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--af-border-strong)' }}>
                         <div>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: '#f8fafc' }}>
-                            {a.name} <span style={{ fontSize: 10, color: '#94a3b8', fontFamily: 'monospace' }}>({a.id})</span>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                            {a.name} <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>({a.id})</span>
                           </div>
-                          <div style={{ fontSize: 10, color: '#94a3b8' }}>Vai trò: {a.role}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Vai trò: {a.role}</div>
                         </div>
                         <select
                           value={currentModel}
                           onChange={(e) => handleAgentOverrideChange(a.id, e.target.value)}
                           style={{
                             width: 220,
-                            background: currentModel ? '#1e3a8a' : '#1e293b',
-                            color: '#f8fafc',
-                            border: currentModel ? '1px solid #3b82f6' : '1px solid #334155',
+                            background: currentModel ? 'var(--accent-strong)' : 'var(--bg-inset)',
+                            color: 'var(--text-primary)',
+                            border: currentModel ? '1px solid var(--accent)' : '1px solid var(--af-border-strong)',
                             borderRadius: 6,
                             padding: '6px 8px',
                             fontSize: 11,
@@ -358,18 +358,18 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
         )}
 
         {/* Footer actions */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, borderTop: '1px solid #1e293b', paddingTop: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, borderTop: '1px solid var(--bg-inset)', paddingTop: 14 }}>
           {savedSuccess && (
-            <span style={{ fontSize: 12, color: '#4ade80', marginRight: 'auto', fontWeight: 600 }}>
+            <span style={{ fontSize: 12, color: 'var(--wb-success-strong)', marginRight: 'auto', fontWeight: 600 }}>
               ✓ Đã lưu cấu hình thành công!
             </span>
           )}
           <button
             onClick={onClose}
             style={{
-              background: '#1e293b',
-              color: '#cbd5e1',
-              border: '1px solid #334155',
+              background: 'var(--bg-inset)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--af-border-strong)',
               borderRadius: 8,
               padding: '8px 16px',
               fontSize: 12,
@@ -383,7 +383,7 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
             onClick={handleSave}
             disabled={saving || loading}
             style={{
-              background: saving ? '#2563eb' : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+              background: saving ? 'var(--accent-strong)' : 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)',
               color: 'white',
               border: 'none',
               borderRadius: 8,

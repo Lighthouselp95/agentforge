@@ -94,24 +94,24 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
       zIndex: 1000
     }}>
       <div className="fade-in af-dialog-box" style={{
-        background: '#0f172a',
+        background: 'var(--bg-panel)',
         borderRadius: 16,
         padding: 24,
         width: 480,
         maxWidth: '92vw',
         maxHeight: '90vh',
         overflow: 'auto',
-        border: '1px solid #334155',
+        border: '1px solid var(--af-border-strong)',
         boxShadow: '0 20px 45px rgba(0, 0, 0, 0.6)',
         display: 'flex',
         flexDirection: 'column',
         gap: 16
       }}>
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1e293b', paddingBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--bg-inset)', paddingBottom: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 20 }}>✨</span>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#f8fafc', letterSpacing: '-0.01em' }}>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
               Spawn New Worker Agent
             </h3>
           </div>
@@ -120,7 +120,7 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#94a3b8',
+              color: 'var(--text-muted)',
               fontSize: 16,
               cursor: 'pointer',
               padding: 4
@@ -132,7 +132,7 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
 
         {/* Name */}
         <div>
-          <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
             Agent Name
           </label>
           <input
@@ -141,24 +141,24 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
             placeholder="e.g., code_refactor, ui_coder, test_runner"
             style={{
               width: '100%',
-              background: '#1e293b',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-inset)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--af-border-strong)',
               borderRadius: 8,
               padding: '10px 12px',
               fontSize: 13,
               outline: 'none',
               transition: 'border-color 0.2s'
             }}
-            onFocus={(e) => { e.currentTarget.style.borderColor = '#3b82f6'; }}
-            onBlur={(e) => { e.currentTarget.style.borderColor = '#334155'; }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--af-border-strong)'; }}
           />
         </div>
 
         {/* Parent Orchestrator / Team */}
         {role !== 'orchestrator' && (
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
               Parent Orchestrator / Team
             </label>
             <select
@@ -166,9 +166,9 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
               onChange={(e) => setSpawnedBy(e.target.value)}
               style={{
                 width: '100%',
-                background: '#1e293b',
-                color: '#f8fafc',
-                border: '1px solid #334155',
+                background: 'var(--bg-inset)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--af-border-strong)',
                 borderRadius: 8,
                 padding: '10px 12px',
                 fontSize: 13,
@@ -187,7 +187,7 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
 
         {/* Role */}
         <div>
-          <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
             Specialized Role
           </label>
           <select
@@ -195,9 +195,9 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
             onChange={(e) => setRole(e.target.value)}
             style={{
               width: '100%',
-              background: '#1e293b',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-inset)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--af-border-strong)',
               borderRadius: 8,
               padding: '10px 12px',
               fontSize: 13,
@@ -211,7 +211,7 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
 
         {/* Type */}
         <div>
-          <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
             Execution Protocol
           </label>
           <div style={{ display: 'flex', gap: 10 }}>
@@ -219,9 +219,9 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
               onClick={() => setType('acp')}
               style={{
                 flex: 1,
-                background: type === 'acp' ? 'rgba(59, 130, 246, 0.2)' : '#1e293b',
-                color: type === 'acp' ? '#60a5fa' : '#94a3b8',
-                border: `1px solid ${type === 'acp' ? '#3b82f6' : '#334155'}`,
+                background: type === 'acp' ? 'rgba(59, 130, 246, 0.2)' : 'var(--bg-inset)',
+                color: type === 'acp' ? 'var(--accent)' : 'var(--text-muted)',
+                border: `1px solid ${type === 'acp' ? 'var(--accent)' : 'var(--af-border-strong)'}`,
                 borderRadius: 8,
                 padding: '10px',
                 fontSize: 12,
@@ -236,9 +236,9 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
               onClick={() => setType('api')}
               style={{
                 flex: 1,
-                background: type === 'api' ? 'rgba(59, 130, 246, 0.2)' : '#1e293b',
-                color: type === 'api' ? '#60a5fa' : '#94a3b8',
-                border: `1px solid ${type === 'api' ? '#3b82f6' : '#334155'}`,
+                background: type === 'api' ? 'rgba(59, 130, 246, 0.2)' : 'var(--bg-inset)',
+                color: type === 'api' ? 'var(--accent)' : 'var(--text-muted)',
+                border: `1px solid ${type === 'api' ? 'var(--accent)' : 'var(--af-border-strong)'}`,
                 borderRadius: 8,
                 padding: '10px',
                 fontSize: 12,
@@ -255,7 +255,7 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
         {/* Project Dir (ACP only) */}
         {type === 'acp' && (
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
               Working Directory
             </label>
             <input
@@ -264,9 +264,9 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
               placeholder="./path/to/project"
               style={{
                 width: '100%',
-                background: '#1e293b',
-                color: '#f8fafc',
-                border: '1px solid #334155',
+                background: 'var(--bg-inset)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--af-border-strong)',
                 borderRadius: 8,
                 padding: '10px 12px',
                 fontSize: 13,
@@ -278,7 +278,7 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
 
         {/* Model */}
         <div>
-          <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
             Dedicated Model (Optional)
           </label>
           <select
@@ -287,9 +287,9 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
             disabled={loadingModels}
             style={{
               width: '100%',
-              background: '#1e293b',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-inset)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--af-border-strong)',
               borderRadius: 8,
               padding: '10px 12px',
               fontSize: 13,
@@ -304,13 +304,13 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
         </div>
 
         {/* Buttons */}
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', borderTop: '1px solid #1e293b', paddingTop: 14 }}>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', borderTop: '1px solid var(--bg-inset)', paddingTop: 14 }}>
           <button
             onClick={onClose}
             style={{
-              background: '#1e293b',
-              color: '#cbd5e1',
-              border: '1px solid #334155',
+              background: 'var(--bg-inset)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--af-border-strong)',
               borderRadius: 8,
               padding: '8px 16px',
               fontSize: 13,
@@ -324,7 +324,7 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
             onClick={handleAdd}
             disabled={!name.trim()}
             style={{
-              background: name.trim() ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : '#334155',
+              background: name.trim() ? 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)' : 'var(--af-border-strong)',
               color: 'white',
               border: 'none',
               borderRadius: 8,
