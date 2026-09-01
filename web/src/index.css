@@ -2,47 +2,53 @@
 
 :root,
 html[data-theme='dark'] {
-  /* ===== Design Tokens — DARK (Deep Obsidian) ===== */
-  --bg-main: #090d16;
-  --bg-panel: #0f172a;
-  --bg-inset: #111827;
-  --bg-input: #131c2e;
-  --bg-card: #101726;
-  --bg-card-active: #172036;
-  --af-border: rgba(148, 163, 184, 0.12);
-  --af-border-strong: rgba(148, 163, 184, 0.22);
-  --text-primary: #f8fafc;
+  /* ===== Design Tokens — DARK OBSIDIAN / DEEP CHARCOAL (Linear / Cursor / VS Code Dark Modern) ===== */
+  --bg-main: #090d14;
+  --bg-panel: #0e131d;
+  --bg-inset: #121824;
+  --bg-input: #151d2c;
+  --bg-card: #101622;
+  --bg-card-active: #161f30;
+  --af-border: rgba(255, 255, 255, 0.08);
+  --af-border-strong: rgba(255, 255, 255, 0.15);
+  --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
   --accent: #3b82f6;
   --accent-strong: #2563eb;
-  --accent-soft: rgba(59, 130, 246, 0.14);
-  --shadow-panel: 0 8px 24px rgba(2, 6, 23, 0.35);
-  --shadow-pop: 0 16px 48px rgba(2, 6, 23, 0.5);
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --shadow-panel: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 16px 50px rgba(0, 0, 0, 0.6);
   --radius-lg: 14px;
   --radius-md: 10px;
   --report-label: #fde047;
-  --af-bg-sidebar: #0f172a;
+  --af-bg-sidebar: #0e131d;
+  --toolblock-bg: #182234;
+  --toolblock-head-bg: #182234;
+  --toolblock-code-bg: #182234;
+  --toolblock-border: rgba(255, 255, 255, 0.12);
+  --toolblock-head-border: rgba(255, 255, 255, 0.08);
+  --toolblock-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 
-  /* ===== Workbench Tokens — DARK (One Dark / Catppuccin Mocha inspired) ===== */
-  --wb-activity-bg: #0b0f1a;
-  --wb-activity-icon: #94a3b8;
-  --wb-activity-icon-active: #f8fafc;
-  --wb-activity-border: rgba(148, 163, 184, 0.14);
-  --wb-tab-bg: #111827;
-  --wb-tab-active: #0f172a;
-  --wb-tab-hover: rgba(148, 163, 184, 0.10);
-  --wb-tab-border: rgba(148, 163, 184, 0.20);
-  --wb-statusbar-bg: #0b0f1a;
+  /* ===== Workbench Tokens — DARK OBSIDIAN ===== */
+  --wb-activity-bg: #070a10;
+  --wb-activity-icon: #64748b;
+  --wb-activity-icon-active: #f1f5f9;
+  --wb-activity-border: rgba(255, 255, 255, 0.08);
+  --wb-tab-bg: #121824;
+  --wb-tab-active: #101622;
+  --wb-tab-hover: rgba(255, 255, 255, 0.06);
+  --wb-tab-border: rgba(255, 255, 255, 0.10);
+  --wb-statusbar-bg: #070a10;
   --wb-statusbar-text: #94a3b8;
-  --wb-panel-bg: #0d1526;
-  --wb-panel-border: rgba(148, 163, 184, 0.14);
-  --wb-tree-hover: rgba(148, 163, 184, 0.10);
+  --wb-panel-bg: #0e131d;
+  --wb-panel-border: rgba(255, 255, 255, 0.08);
+  --wb-tree-hover: rgba(255, 255, 255, 0.06);
   --wb-tree-active: rgba(59, 130, 246, 0.16);
-  --wb-chat-tab-bg: #0d1526;
-  --wb-chat-tab-active: #0f172a;
-  --wb-chat-tab-hover: rgba(148, 163, 184, 0.08);
-  --wb-chat-tab-border: rgba(148, 163, 184, 0.18);
+  --wb-chat-tab-bg: #0e131d;
+  --wb-chat-tab-active: #101622;
+  --wb-chat-tab-hover: rgba(255, 255, 255, 0.05);
+  --wb-chat-tab-border: rgba(255, 255, 255, 0.08);
   --wb-success: #4ade80;
   --wb-success-strong: #34d399;
   --wb-success-bg: rgba(34, 197, 94, 0.14);
@@ -54,62 +60,68 @@ html[data-theme='dark'] {
   --wb-warn: #fbbf24;
   --wb-warn-bg: rgba(250, 204, 21, 0.12);
   --wb-warn-border: rgba(250, 204, 21, 0.35);
-  --wb-info: #38bdf8;
-  --wb-info-bg: rgba(56, 189, 248, 0.12);
-  --wb-info-border: rgba(56, 189, 248, 0.3);
+  --wb-info: #3b82f6;
+  --wb-info-bg: rgba(59, 130, 246, 0.12);
+  --wb-info-border: rgba(59, 130, 246, 0.3);
   --wb-purple: #a5b4fc;
-  --wb-purple-bg: rgba(99, 102, 241, 0.1);
-  --wb-purple-border: rgba(99, 102, 241, 0.22);
+  --wb-purple-bg: rgba(99, 102, 241, 0.12);
+  --wb-purple-border: rgba(99, 102, 241, 0.24);
   --wb-cyan: #22d3ee;
   --wb-muted: #64748b;
-  --wb-token-bg: rgba(56, 189, 248, 0.12);
-  --wb-token-border: rgba(56, 189, 248, 0.25);
+  --wb-token-bg: rgba(59, 130, 246, 0.12);
+  --wb-token-border: rgba(59, 130, 246, 0.25);
 
   /* Legacy aliases (giữ tương thích biến cũ trong codebase) */
   --bg-primary: var(--bg-main);
   --bg-secondary: var(--bg-panel);
   --bg-tertiary: var(--bg-inset);
-  --bg-card-hover: #334155;
-  --border-focus: #3b82f6;
+  --bg-card-hover: #26324d;
+  --border-focus: #4cc2ff;
 }
 
 html[data-theme='light'] {
-  /* ===== Design Tokens — LIGHT (Off-White, high contrast) ===== */
-  --bg-main: #f8fafc;
+  /* ===== Design Tokens — LIGHT (Off-white hiện đại, không trắng xóa, cool) ===== */
+  --bg-main: #f5f7fa;
   --bg-panel: #ffffff;
-  --bg-inset: #f1f5f9;
+  --bg-inset: #eef2f6;
   --bg-input: #ffffff;
-  --bg-card: #f1f5f9;
-  --bg-card-active: #eef4ff;
-  --af-border: #e2e8f0;
+  --bg-card: #ffffff;
+  --bg-card-active: #e9f2ff;
+  --af-border: rgba(15, 23, 42, 0.08);
   --af-border-strong: rgba(15, 23, 42, 0.16);
   --text-primary: #0f172a;
-  --text-secondary: #334155;
+  --text-secondary: #3c4b63;
   --text-muted: #64748b;
   --accent: #2563eb;
-  --accent-strong: #1d4ed8;
+  --accent-strong: #0ea5e9;
   --accent-soft: rgba(37, 99, 235, 0.10);
-  --shadow-panel: 0 8px 24px rgba(15, 23, 42, 0.06);
-  --shadow-pop: 0 16px 48px rgba(15, 23, 42, 0.12);
+  --shadow-panel: 0 8px 30px rgba(15, 23, 42, 0.06);
+  --shadow-pop: 0 16px 50px rgba(15, 23, 42, 0.12);
   --report-label: #b45309;
-  --af-bg-sidebar: #f8fafc;
+  --af-bg-sidebar: #f5f7fa;
+  --toolblock-bg: #f1f5f9;
+  --toolblock-head-bg: #f1f5f9;
+  --toolblock-code-bg: #f1f5f9;
+  --toolblock-border: rgba(15, 23, 42, 0.10);
+  --toolblock-head-border: rgba(15, 23, 42, 0.08);
+  --toolblock-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
 
-  /* ===== Workbench Tokens — LIGHT (clean minimal) ===== */
-  --wb-activity-bg: #eef2f7;
-  --wb-activity-icon: #475569;
+  /* ===== Workbench Tokens — LIGHT (cool minimal, có layer) ===== */
+  --wb-activity-bg: #e9eef4;
+  --wb-activity-icon: #526079;
   --wb-activity-icon-active: #0f172a;
   --wb-activity-border: rgba(15, 23, 42, 0.10);
-  --wb-tab-bg: #e8edf4;
+  --wb-tab-bg: #e3e9f1;
   --wb-tab-active: #ffffff;
   --wb-tab-hover: rgba(15, 23, 42, 0.06);
   --wb-tab-border: rgba(15, 23, 42, 0.12);
-  --wb-statusbar-bg: #eef2f7;
-  --wb-statusbar-text: #475569;
+  --wb-statusbar-bg: #e9eef4;
+  --wb-statusbar-text: #3c4b63;
   --wb-panel-bg: #ffffff;
   --wb-panel-border: rgba(15, 23, 42, 0.10);
   --wb-tree-hover: rgba(15, 23, 42, 0.06);
   --wb-tree-active: rgba(37, 99, 235, 0.12);
-  --wb-chat-tab-bg: #f1f5f9;
+  --wb-chat-tab-bg: #eef2f6;
   --wb-chat-tab-active: #ffffff;
   --wb-chat-tab-hover: rgba(15, 23, 42, 0.06);
   --wb-chat-tab-border: rgba(15, 23, 42, 0.12);
@@ -140,7 +152,7 @@ html[data-theme='light'] {
   --bg-secondary: var(--bg-panel);
   --bg-tertiary: var(--bg-inset);
   --bg-card: var(--bg-card);
-  --bg-card-hover: #e2e8f0;
+  --bg-card-hover: #dfe6ef;
   --border-color: var(--af-border);
   --border-focus: var(--accent);
 }
@@ -273,12 +285,12 @@ code, pre, .font-mono {
 
 .interactive-card:hover {
   transform: translateY(-1px);
-  border-color: rgba(99, 102, 241, 0.5) !important;
-  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(99, 102, 241, 0.2);
+  border-color: rgba(76, 194, 255, 0.5) !important;
+  box-shadow: 0 4px 18px -2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(76, 194, 255, 0.2);
 }
 
 .glass-panel {
-  background: rgba(30, 41, 59, 0.7);
+  background: rgba(19, 26, 43, 0.75);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -287,23 +299,23 @@ code, pre, .font-mono {
 /* ============ THEME LIGHT/DARK ============ */
 /* Dark = mặc định hiện tại. Light: hiện đại tối giản, nền trắng, viền mảnh, ít bóng. */
 html[data-theme='light'] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-tertiary: #eef2f7;
+  --bg-primary: #f5f7fa;
+  --bg-secondary: #eef2f6;
+  --bg-tertiary: #e3e9f1;
   --bg-card: #ffffff;
   --border-color: rgba(15, 23, 42, 0.08);
   --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  --text-secondary: #3c4b63;
+  --text-muted: #64748b;
 }
 
 html[data-theme='light'] body {
-  background-color: #ffffff;
+  background-color: #f5f7fa;
 }
 
 /* --- Override surface có inline-style cứng bằng !important qua hook class --- */
 html[data-theme='light'] .af-shell {
-  background: #ffffff !important;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%) !important;
   color: #0f172a !important;
 }
 html[data-theme='light'] .af-sidebar {
@@ -338,13 +350,14 @@ html[data-theme='light'] .af-chat-input textarea {
 
 /* Dialogs */
 html[data-theme='light'] .af-overlay {
-  background: rgba(15, 23, 42, 0.35) !important;
+  background: rgba(15, 23, 42, 0.40) !important;
 }
 html[data-theme='light'] .af-dialog-box {
   background: #ffffff !important;
   color: #0f172a !important;
-  border-color: rgba(15, 23, 42, 0.1) !important;
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.10) !important;
+  border-color: rgba(15, 23, 42, 0.10) !important;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12) !important;
+  border-radius: 12px !important;
 }
 html[data-theme='light'] .af-card {
   background: #ffffff !important;
@@ -376,21 +389,21 @@ html[data-theme='dark'] .af-bubble,
   background: rgba(255, 255, 255, 0.03) !important;
   border: 1px solid rgba(255, 255, 255, 0.06) !important;
   border-radius: 12px !important;
-  box-shadow: none !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
   padding: 12px 16px !important;
-  color: #f8fafc !important;
+  color: #e8edf3 !important;
   width: fit-content !important;
   max-width: 88% !important;
 }
 
 html[data-theme='dark'] .af-bubble-user,
 :root .af-bubble-user {
-  background: rgba(59, 130, 246, 0.12) !important;
-  border: 1px solid rgba(59, 130, 246, 0.25) !important;
+  background: rgba(76, 194, 255, 0.14) !important;
+  border: 1px solid rgba(76, 194, 255, 0.28) !important;
   border-radius: 12px !important;
-  box-shadow: none !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
   padding: 10px 14px !important;
-  color: #f8fafc !important;
+  color: #e8edf3 !important;
   width: fit-content !important;
   max-width: 85% !important;
 }
@@ -418,17 +431,45 @@ html[data-theme='light'] .af-bubble-user {
   max-width: 85% !important;
 }
 
+/* ===== 3-LAYER SURFACE ELEVATION ===== */
+.af-toolblock {
+  background: var(--toolblock-bg) !important;
+  border: 1px solid var(--toolblock-border) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--toolblock-shadow) !important;
+}
+
+.af-toolblock-head {
+  background: var(--toolblock-head-bg) !important;
+  border-bottom: 1px solid var(--toolblock-head-border) !important;
+}
+
+.af-toolblock-body,
+.af-toolblock pre {
+  background: var(--toolblock-code-bg) !important;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace !important;
+  font-size: 11.5px !important;
+  font-weight: 450 !important;
+  line-height: 1.5 !important;
+  letter-spacing: 0.1px !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  color: var(--text-primary) !important;
+}
+
 /* ToolCallBlock (light) */
 html[data-theme='light'] .af-toolblock {
-  background: #f8fafc !important;
-  border-color: rgba(15, 23, 42, 0.10) !important;
+  background: var(--toolblock-bg) !important;
+  border-color: var(--toolblock-border) !important;
 }
 html[data-theme='light'] .af-toolblock-head {
-  background: #eef2f7 !important;
-  border-bottom-color: rgba(15, 23, 42, 0.08) !important;
+  background: var(--toolblock-head-bg) !important;
+  border-bottom-color: var(--toolblock-head-border) !important;
 }
-html[data-theme='light'] .af-toolblock-body {
-  color: #334155 !important;
+html[data-theme='light'] .af-toolblock-body,
+html[data-theme='light'] .af-toolblock pre {
+  background: var(--toolblock-code-bg) !important;
+  color: var(--text-primary) !important;
 }
 html[data-theme='light'] .af-thinking {
   background: #f8fafc !important;

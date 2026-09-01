@@ -15,7 +15,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:4001',
         changeOrigin: true,
         // Agent chạy (opencode) có thể mất vài phút; mặc định proxyTimeout 120s sẽ cắt đứt kết nối
         // khiến browser báo "Failed to fetch". Nới lỏng lên 10 phút.
@@ -29,7 +29,7 @@ export default defineConfig({
         }
       },
       '/ws': {
-        target: 'ws://localhost:3001',
+        target: 'ws://localhost:4001',
         ws: true,
         timeout: 600000
       }

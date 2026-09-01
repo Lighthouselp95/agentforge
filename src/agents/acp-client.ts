@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { openSync, writeSync, fsyncSync, closeSync, unlinkSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import net from 'net';
 import http from 'http';
 import { StringDecoder } from 'string_decoder';
@@ -14,6 +15,12 @@ const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
 // Giới hạn hàng đợi tin nhắn chờ xử lý cho 1 agent — chống phình bộ nhớ
 const MAX_PENDING = 20;
+
+function getAgentForgeTmpDir(): string {
+  const dir = join(tmpdir(), 'agentforge', 'tmp');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 export function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -397,9 +404,8 @@ export class ACPClient {
 
     try {
       const projectDir = this.config.projectDir || process.cwd();
-      const relFile = join('data', 'tmp', `inject-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-      const tmpFile = join(projectDir, relFile);
-      mkdirSync(join(projectDir, 'data', 'tmp'), { recursive: true });
+      const tmpBaseDir = getAgentForgeTmpDir();
+      const tmpFile = join(tmpBaseDir, `inject-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
       writeFileSync(tmpFile, prompt.normalize('NFC'), { encoding: 'utf-8' });
 
       const roleToAgent: Record<string, string> = {
@@ -428,9 +434,10 @@ export class ACPClient {
           ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; ${fullCmd}`]
           : ['-c', fullCmd];
       } else {
+        const safeTmpPath = tmpFile.replace(/'/g, "''");
         cmdArgs = isWin
-          ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Raw -Encoding utf8 '${relFile}' | opencode run${agentFlag}`]
-          : ['-c', `cat "${relFile}" | opencode run${agentFlag}`];
+          ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Raw -Encoding utf8 '${safeTmpPath}' | opencode run${agentFlag}`]
+          : ['-c', `cat "${tmpFile}" | opencode run${agentFlag}`];
       }
 
       const utf8Env = {
@@ -603,10 +610,9 @@ export class ACPClient {
       console.log(`[ACP] WARNING: Session ${this.sessionId} format unusual — KEEPING it (persistent-session policy)`);
     }
 
-    // Write prompt to safe local temp file with UTF-8 encoding (NFC normalized)
-    const relFile = join('data', 'tmp', `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-    const tmpFile = join(projectDir, relFile);
-    mkdirSync(join(projectDir, 'data', 'tmp'), { recursive: true });
+    // Write prompt to safe OS temp directory with UTF-8 encoding (NFC normalized)
+    const tmpBaseDir = getAgentForgeTmpDir();
+    const tmpFile = join(tmpBaseDir, `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     writeFileSync(tmpFile, prompt.normalize('NFC'), { encoding: 'utf-8' });
 
     // Build command — use stdin pipe via cat/type instead of inline args
@@ -671,9 +677,10 @@ export class ACPClient {
         ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; ${fullCmd}`]
         : ['-c', fullCmd];
     } else {
+      const safeTmpPath = tmpFile.replace(/'/g, "''");
       cmdArgs = isWin
-        ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Raw -Encoding utf8 '${relFile}' | opencode run --auto --format json${agentFlag}`]
-        : ['-c', `cat "${relFile}" | opencode run --auto --format json${agentFlag}`];
+        ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Raw -Encoding utf8 '${safeTmpPath}' | opencode run --auto --format json${agentFlag}`]
+        : ['-c', `cat "${tmpFile}" | opencode run --auto --format json${agentFlag}`];
     }
 
     try {
@@ -813,6 +820,8 @@ export class ACPClient {
 
       const errText = `${err.message || ''} ${err.stdout?.toString() || ''} ${err.stderr?.toString() || ''}`;
       const isSessionNotFoundOrExpired = /\b404\b|invalid session|session (invalid|not found|does not exist|not exist|expired)/i.test(errText);
+      // Permanent tool/query errors: không retry vô hạn — trả về ngay để tránh loop
+      const isPermanentToolError = /detected unavailable tool|unavailable tool|tool not found|unknown tool|failed query|query failed|invalid tool/i.test(errText);
 
       // SESSION KHÓA VĨNH VIỄN: kể cả 404/session-expired cũng KHÔNG reset —
       // giữ nguyên sessionId cũ, retry tiếp tục trên session đó (chính sách persistent-session).
@@ -820,9 +829,14 @@ export class ACPClient {
         console.log(`[ACP] Session ${this.sessionId || '(unregistered)'} not found/expired — KEEPING session (persistent-session policy), retrying without reset`);
       }
 
-      // Trường hợp lỗi tạm thời khác (mạng, timeout, API busy, v.v.):
-      // Retry lên tới 3 lần (attempt < 2) với exponential backoff MÀ KHÔNG reset session
-      if (attempt < 2) {
+      // Phân biệt lỗi vĩnh viễn (tool unavailable / failed query) vs lỗi tạm thời:
+      // Tool unavailable là lỗi logic, retry không giúp — trả về ngay.
+      if (isPermanentToolError) {
+        console.log(`[ACP] Permanent tool/query error detected — no retry: ${errText.slice(0, 200)}`);
+        // Không retry, đi thẳng xuống xử lý lượt cuối
+      } else if (attempt < 2) {
+        // Trường hợp lỗi tạm thời khác (mạng, timeout, API busy, v.v.):
+        // Retry lên tới 3 lần (attempt < 2) với exponential backoff MÀ KHÔNG reset session
         const delay = Math.pow(2, attempt) * 1500;
         console.log(`[ACP] Error detected (${err.message}). Retrying in ${delay}ms... (Attempt ${attempt + 1}/3)`);
         await new Promise(r => setTimeout(r, delay));

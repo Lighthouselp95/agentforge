@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback, Component } from 'react';
+﻿import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback, Component } from 'react';
 import { highlight, isSupportedLang } from '../utils/highlight';
 
 interface Message {
@@ -15,6 +15,7 @@ interface ChatMsg {
   from: string;
   to?: string;
   content: string;
+  task?: string;
   timestamp?: number | string;
   agentName?: string;
   agentRole?: string;
@@ -32,17 +33,40 @@ interface AgentInfo {
   id: string;
   name: string;
   role?: string;
+  type?: string;
+  task?: string;
+  status?: string;
 }
 
 function stripTalkTags(text: string): string {
   if (!text) return '';
   let result = String(text);
 
-  // 1. Strip XML talk opening tags with routing attributes ONLY: <talk target="..." task="...">
-  // Tuyệt đối không xóa thẻ `<talk>` trần không có thuộc tính định tuyến để bảo toàn chữ `<talk>` trong inline code / văn bản
-  result = result.replace(/<talk\s+[^>]*\b(?:target|to|agent|id|role|name)\s*=[^>]*>/gi, '');
+  // Mask code blocks
+  const codeBlocks: string[] = [];
+  result = result.replace(/```[\s\S]*?```|`[^`\n]+`/g, (m) => {
+    const t = `__AF_CODE_BLOCK_${codeBlocks.length}__`;
+    codeBlocks.push(m);
+    return t;
+  });
 
-  // 2. Strip bracket [TALK target=...] tags
+  // Doc Line Masking: bảo vệ dòng trích dẫn, danh sách markdown giải thích/hướng dẫn về thẻ
+  // (ví dụ: "- Dùng thẻ <spawn role=... />", "> trích dẫn <talk ...>", "Hướng dẫn (ví dụ: gán agent.task = ...):")
+  const docLines: string[] = [];
+  result = result.replace(/^[ \t]*(?:>|[-*+]|\d+\.|\([^\n)]*|.*(?:ví dụ|hướng dẫn|cú pháp|lệnh|thẻ|dùng|tag|syntax|example|instruction|task_update)[^\n]*)[ \t]+.*(?:<|\b(?:TALK|SPAWN|TASK_UPDATE)\b).*$/gmi, (m) => {
+    const t = `__AF_DOC_LINE_${docLines.length}__`;
+    docLines.push(m);
+    return t;
+  });
+
+  // 1. Strip full XML dispatch blocks WITH routing attributes: <talk target="..." task="...">payload</talk>
+  result = result.replace(/^[ \t]*<\s*(?:talk|spawn|stop|resume|create_role|create-role|delete_agent)\b[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id|role|name|task)\s*=[^>]*>[\s\S]*?<\/\s*(?:talk|spawn|stop|resume|create_role|create-role|delete_agent)\s*>[ \t]*\n?/gmi, '');
+  // 2. Strip standalone self-closing dispatch commands
+  result = result.replace(/^[ \t]*<\s*(?:spawn|stop|resume|create_role|create-role|delete_agent)\b[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id|role|name|task)\s*=[^>]*\/>[ \t]*\n?/gmi, '');
+  // 3. Strip unclosed opening dispatch tags (with routing) at line start
+  result = result.replace(/^[ \t]*<\s*(?:talk|spawn)\b[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id|role|name|task)\s*=[^>]*>[ \t]*\n?/gmi, '');
+
+  // 4. Strip bracket [TALK target=...] tags on standalone lines
   const strText = result;
   let out = '';
   let pos = 0;
@@ -95,6 +119,11 @@ function stripTalkTags(text: string): string {
   }
   // Strip bracket closing tag [/TALK]
   out = out.replace(/\[\/talk\]/gi, '');
+
+  // Unmask
+  for (let i = 0; i < docLines.length; i++) out = out.replace(`__AF_DOC_LINE_${i}__`, docLines[i]);
+  for (let i = 0; i < codeBlocks.length; i++) out = out.replace(`__AF_CODE_BLOCK_${i}__`, codeBlocks[i]);
+
   return out.replace(/^\s+/, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
@@ -148,9 +177,10 @@ function parseToolInputObject(input: string | undefined | null): Record<string, 
 }
 
 // Một dòng diff kiểu git: KHÔNG dùng tiền tố +/- — chỉ phân biệt bằng nền đỏ/xanh + viền trái,
-// giữ nguyên thụt lề gốc của code.
-function DiffLine({ sign, text }: { sign: '-' | '+'; text: string }) {
+// giữ nguyên thụt lề gốc của code. Dòng thêm (+) có syntax highlight (lang) như Write/Read viewer.
+function DiffLine({ sign, text, tokens }: { sign: '-' | '+'; text: string; tokens?: any[] }) {
   const isRemove = sign === '-';
+  const hasTokens = !isRemove && tokens && tokens.length > 0;
   return (
     <div style={{
       background: isRemove ? 'rgba(239, 68, 68, 0.14)' : 'rgba(34, 197, 94, 0.14)',
@@ -158,12 +188,14 @@ function DiffLine({ sign, text }: { sign: '-' | '+'; text: string }) {
       borderLeft: isRemove ? '3px solid #ef4444' : '3px solid #22c55e',
       padding: '1px 8px',
       fontFamily: 'monospace',
-      fontSize: 12,
+      fontSize: 11,
       lineHeight: 1.55,
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word'
     }}>
-      {text || ' '}
+      {hasTokens ? tokens.map((t, i) => (
+        <span key={i} style={{ color: t.color || undefined, fontStyle: t.italic ? 'italic' : undefined, fontWeight: t.bold ? 700 : undefined }}>{t.text}</span>
+      )) : (text || ' ')}
     </div>
   );
 }
@@ -176,7 +208,7 @@ function ContextLine({ text }: { text: string }) {
       borderLeft: '3px solid transparent',
       padding: '1px 8px',
       fontFamily: 'monospace',
-      fontSize: 12,
+      fontSize: 11,
       lineHeight: 1.55,
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word'
@@ -354,12 +386,15 @@ function extIcon(path: string): React.ReactNode {
   );
 }
 
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
+function CodeBlock({ code, lang, isMobile }: { code: string; lang: string; isMobile?: boolean }) {
   const [copied, setCopied] = useState(false);
+
+  // USER: giới hạn tối đa 90 dòng hiển thị code (cắt trước khi tokenize)
+  const displayCode = clampToolLines(code).text;
 
   // Chỉ tokenize khi ngôn ngữ được hỗ trợ — fallback plain text giữ hiệu năng tối đa
   const supported = useMemo(() => isSupportedLang(lang), [lang]);
-  const tokens = useMemo(() => (supported ? highlight(code, lang) : []), [supported, code, lang]);
+  const tokens = useMemo(() => (supported ? highlight(displayCode, lang) : []), [supported, displayCode, lang]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
@@ -418,7 +453,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         padding: '10px 14px',
         overflowX: 'auto',
         maxWidth: '100%',
-        fontSize: 12.5,
+        fontSize: isMobile ? 12 : 11.5,
         lineHeight: 1.55,
         color: 'var(--text-primary)',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
@@ -437,7 +472,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
             </span>
           ))}</code>
         ) : (
-          <code>{code}</code>
+          <code>{displayCode}</code>
         )}
       </pre>
     </div>
@@ -450,7 +485,7 @@ function parseXmlAttributes(attrStr: string): Record<string, string> {
   const regex = /([a-zA-Z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
   let match;
   while ((match = regex.exec(attrStr)) !== null) {
-    const key = match[1].toLowerCase();
+    const key = String(match[1] || '').toLowerCase();
     const val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : (match[4] || ''));
     attrs[key] = val;
   }
@@ -478,20 +513,29 @@ function splitReportAndConversation(content: string): SplitMessageResult {
     return token;
   });
 
-  // 1. Strip all <talk target="...">...</talk> blocks completely (tags + internal dispatch payload)
-  text = text.replace(/<talk\s+[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id)\s*=[^>]*>[\s\S]*?<\/talk>/gi, '');
-  text = text.replace(/<talk\s+[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id)\s*=[^>]*\/>/gi, '');
-  text = text.replace(/<talk\s+[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id)\s*=[^>]*>[\s\S]*?(?=(?:<\s*(?:talk|spawn|stop|resume|create_role)\b|\[(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE)\b|$))/gi, '');
-  text = text.replace(/\[TALK\s+[^\]]*\]/gi, '');
+  // Doc Line Masking: bảo vệ dòng trích dẫn, danh sách markdown giải thích/hướng dẫn về thẻ
+  // (ví dụ: "- Dùng thẻ <spawn role=... />", "> trích dẫn <talk ...>", "Chỉ đạo (ví dụ: gán agent.task = ...):")
+  const docLines: string[] = [];
+  text = text.replace(/^[ \t]*(?:>|[-*+]|\d+\.|\([^\n)]*|.*(?:ví dụ|hướng dẫn|cú pháp|lệnh|thẻ|dùng|tag|syntax|example|instruction|task_update)[^\n]*)[ \t]+.*(?:<|\b(?:TALK|SPAWN|TASK_UPDATE)\b).*$/gmi, (match) => {
+    const token = `__AF_DOC_LINE_${docLines.length}__`;
+    docLines.push(match);
+    return token;
+  });
 
-  // 2. Strip all <spawn ...> blocks completely
-  text = text.replace(/<spawn\s+[^>]*>[\s\S]*?<\/spawn>/gi, '');
-  text = text.replace(/<spawn\s+[^>]*\/?>/gi, '');
-  text = text.replace(/\[SPAWN\s+[^\]]*\]/gi, '');
+  // 1. Strip genuine dispatch command blocks (standalone on their own lines or wrapping payload)
+  text = text.replace(/^[ \t]*<\s*(?:talk|spawn|stop|resume|create_role|create-role|delete_agent)\b[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id|role|name|task)\s*=[^>]*>[\s\S]*?<\/\s*(?:talk|spawn|stop|resume|create_role|create-role|delete_agent)\s*>[ \t]*\n?/gmi, '');
+  text = text.replace(/^[ \t]*<\s*(?:spawn|stop|resume|create_role|create-role|delete_agent)\b[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id|role|name|task)\s*=[^>]*\/>[ \t]*\n?/gmi, '');
+  text = text.replace(/^[ \t]*<\s*(?:talk|spawn)\b[^>]*\b(?:target|target-id|target_id|agent-id|agent_id|agent|to|id|role|name|task)\s*=[^>]*>[ \t]*\n?/gmi, '');
+  text = text.replace(/^[ \t]*\[(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE)\b[^\]]*\][ \t]*\n?/gmi, '');
 
   // 3. Clean technical routing tags and headers
   text = text.replace(/(?:\[FROM:\s*[^\]]+\]\s*)?\[TO:\s*[^\]]+\]\s*(?:Task complete\.?)?/gi, '');
   text = text.replace(/^\s*\[TASK\][^\n]*\n?/gmi, '');
+
+  // Khôi phục lại docLines đã được bảo vệ an toàn
+  for (let i = 0; i < docLines.length; i++) {
+    text = text.replace(`__AF_DOC_LINE_${i}__`, docLines[i]);
+  }
 
   // Khôi phục lại các code blocks đã được bảo vệ an toàn
   for (let i = 0; i < codeBlocks.length; i++) {
@@ -504,7 +548,7 @@ function splitReportAndConversation(content: string): SplitMessageResult {
   const xmlMatch = text.match(xmlReportRe);
 
   if (xmlMatch && xmlMatch.index !== undefined) {
-    const rawTag = xmlMatch[1].toLowerCase();
+    const rawTag = String(xmlMatch[1] || '').toLowerCase();
     const attrText = xmlMatch[2] || '';
     const reportContent = xmlMatch[3].trim();
     const attrs = parseXmlAttributes(attrText);
@@ -718,7 +762,7 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
   if (!text) return [];
   const safeText = String(text).normalize('NFC');
   const nodes: React.ReactNode[] = [];
-  const regex = /(`[^`]+`|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\([^)]+\))/gu;
+  const regex = /(`[^`]+`|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|(?<!\w)__[^_]+__(?!\w)|\*[^*]+\*|(?<!\w)_[^_]+_(?!\w)|~~[^~]+~~|\[[^\]]+\]\([^)]+\))/gu;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -828,16 +872,25 @@ function splitMarkdownSections(content: string): Array<{ type: 'code' | 'md'; co
   return sections;
 }
 
-function MarkdownRenderer({ content }: { content: string }) {
+function MarkdownRenderer({ content, isMobile }: { content: string; isMobile?: boolean }) {
   if (!content) return null;
 
   const sections = splitMarkdownSections(content);
 
   return (
-    <div className="af-markdown" style={{ display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.6, minWidth: 0, maxWidth: '100%' }}>
+    <div className="af-markdown" style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4,
+      fontSize: isMobile ? 12 : 12.5,
+      lineHeight: 1.45,
+      minWidth: 0,
+      maxWidth: '100%',
+      color: 'var(--text-primary)'
+    }}>
       {sections.map((sec, secIdx) => {
         if (sec.type === 'code') {
-          return <CodeBlock key={`sec-${secIdx}`} code={sec.content} lang={sec.lang || ''} />;
+          return <CodeBlock key={`sec-${secIdx}`} code={sec.content} lang={sec.lang || ''} isMobile={isMobile} />;
         }
 
         // Process markdown lines
@@ -893,22 +946,22 @@ function MarkdownRenderer({ content }: { content: string }) {
 
           // Markdown Headers (Modern Cursor / Claude Style)
           if (line.startsWith('# ')) {
-            elements.push(<h1 key={`h1-${i}`} style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em', margin: '10px 0 4px', color: 'var(--text-primary)', borderBottom: '1px solid var(--af-border)', paddingBottom: 3 }}>{renderInlineMarkdown(line.slice(2))}</h1>);
+            elements.push(<h1 key={`h1-${i}`} style={{ fontSize: 13.5, fontWeight: 700, letterSpacing: '-0.01em', margin: '8px 0 3px', color: 'var(--text-primary)', borderBottom: '1px solid var(--af-border)', paddingBottom: 2, lineHeight: 1.4 }}>{renderInlineMarkdown(line.slice(2))}</h1>);
             i++;
             continue;
           }
           if (line.startsWith('## ')) {
-            elements.push(<h2 key={`h2-${i}`} style={{ fontSize: 13.5, fontWeight: 600, margin: '8px 0 3px', color: 'var(--text-primary)' }}>{renderInlineMarkdown(line.slice(3))}</h2>);
+            elements.push(<h2 key={`h2-${i}`} style={{ fontSize: 13, fontWeight: 700, margin: '6px 0 2px', color: 'var(--text-primary)', lineHeight: 1.4 }}>{renderInlineMarkdown(line.slice(3))}</h2>);
             i++;
             continue;
           }
           if (line.startsWith('### ')) {
-            elements.push(<h3 key={`h3-${i}`} style={{ fontSize: 13, fontWeight: 600, margin: '6px 0 2px', color: 'var(--text-primary)' }}>{renderInlineMarkdown(line.slice(4))}</h3>);
+            elements.push(<h3 key={`h3-${i}`} style={{ fontSize: 12.5, fontWeight: 700, margin: '5px 0 2px', color: 'var(--text-primary)', lineHeight: 1.4 }}>{renderInlineMarkdown(line.slice(4))}</h3>);
             i++;
             continue;
           }
           if (line.startsWith('#### ')) {
-            elements.push(<h4 key={`h4-${i}`} style={{ fontSize: 13, fontWeight: 600, margin: '6px 0 2px', color: 'var(--text-primary)' }}>{renderInlineMarkdown(line.slice(5))}</h4>);
+            elements.push(<h4 key={`h4-${i}`} style={{ fontSize: 12.5, fontWeight: 700, margin: '4px 0 2px', color: 'var(--text-primary)', lineHeight: 1.4 }}>{renderInlineMarkdown(line.slice(5))}</h4>);
             i++;
             continue;
           }
@@ -918,7 +971,7 @@ function MarkdownRenderer({ content }: { content: string }) {
           const isColonHeader = /^([A-ZÀ-Ỹa-zà-ỹ0-9_ -]{2,50}):$/.test(trimmed);
           if (isAllCapsHeader || isColonHeader) {
             elements.push(
-              <div key={`head-${i}`} style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginTop: 6, marginBottom: 2 }}>
+              <div key={`head-${i}`} style={{ fontWeight: 700, fontSize: 12.5, color: 'var(--text-primary)', marginTop: 5, marginBottom: 2, lineHeight: 1.4 }}>
                 {renderInlineMarkdown(line)}
               </div>
             );
@@ -1024,9 +1077,9 @@ function MarkdownRenderer({ content }: { content: string }) {
               i++;
             }
             elements.push(
-              <div key={`ul-${i}`} style={{ margin: '4px 0 6px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div key={`ul-${i}`} style={{ margin: '3px 0 4px', display: 'flex', flexDirection: 'column', gap: 3 }}>
                 {listItems.map((li, liIdx) => (
-                  <div key={liIdx} style={{ paddingLeft: li.isNested ? 32 : 16, lineHeight: 1.55 }}>
+                  <div key={liIdx} style={{ paddingLeft: li.isNested ? 24 : 14, lineHeight: 1.45 }}>
                     {renderInlineMarkdown(li.text)}
                   </div>
                 ))}
@@ -1048,9 +1101,9 @@ function MarkdownRenderer({ content }: { content: string }) {
               i++;
             }
             elements.push(
-              <div key={`ol-${i}`} style={{ margin: '4px 0 6px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div key={`ol-${i}`} style={{ margin: '3px 0 4px', display: 'flex', flexDirection: 'column', gap: 3 }}>
                 {listItems.map((li, liIdx) => (
-                  <div key={liIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, paddingLeft: li.isNested ? 32 : 16, lineHeight: 1.55 }}>
+                  <div key={liIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, paddingLeft: li.isNested ? 24 : 14, lineHeight: 1.45 }}>
                     <span style={{ color: '#93c5fd', fontWeight: 600, fontFamily: 'monospace', minWidth: 18, flexShrink: 0 }}>
                       {li.num}.
                     </span>
@@ -1064,7 +1117,7 @@ function MarkdownRenderer({ content }: { content: string }) {
 
           // Regular paragraph / text line with line break preservation
           elements.push(
-            <div key={`p-${i}`} style={{ margin: '2px 0', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
+            <div key={`p-${i}`} style={{ margin: '2px 0', whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>
               {renderInlineMarkdown(line)}
             </div>
           );
@@ -1077,9 +1130,23 @@ function MarkdownRenderer({ content }: { content: string }) {
   );
 }
 
+// ============ TOOL LINES CLAMP (giới hạn hiển thị) ============
+// USER yêu cầu: mọi tool trong UI hiển thị tối đa 200 dòng (nâng từ 90 → 200) — tránh khung tool phình
+// vô hạn khi output dài nhưng vẫn đủ đầy đủ không gian theo dõi code/kết quả.
+const MAX_TOOL_LINES = 200;
+function clampToolLines(text: string, max: number = MAX_TOOL_LINES): { text: string; cut: number; total: number } {
+  if (!text) return { text, cut: 0, total: 0 };
+  const str = String(text);
+  const lines = str.split('\n');
+  const total = lines.length;
+  if (total <= max) return { text: str, cut: 0, total };
+  const kept = lines.slice(0, max).join('\n');
+  return { text: `${kept}\n… (đã cắt ${total - max} dòng, tổng ${total} dòng)`, cut: total - max, total };
+}
+
 // ============ WRITE FILE VIEWER ============
 // Hiển thị tool write dạng khung file đẹp: header nổi bật, nội dung code có expand/collapse, badge thành công.
-function WriteFileViewer({ input, output }: { input?: string; output?: string }) {
+function WriteFileViewer({ input, output, isMobile }: { input?: string; output?: string; isMobile?: boolean }) {
   const rawOut = typeof output === 'string' ? stripAnsi(output) : '';
   const rawInp = typeof input === 'string' ? stripAnsi(input) : '';
 
@@ -1097,86 +1164,52 @@ function WriteFileViewer({ input, output }: { input?: string; output?: string })
     filePath = rawInp.trim();
   }
 
-  const lines = fileContent.split('\n');
+  // USER: giới hạn tối đa 90 dòng hiển thị (cắt TRƯỚC khi highlight/count)
+  const clampedFile = clampToolLines(fileContent);
+  const displayContent = clampedFile.text;
+  const lines = displayContent.split('\n');
   const lineCount = lines.length;
 
   // Syntax highlight: lang từ filePath → highlight như CodeBlock; fallback plain nếu không hỗ trợ
   const lang = langFromPath(filePath);
   const supported = useMemo(() => isSupportedLang(lang), [lang]);
-  const tokens = useMemo(() => (supported ? highlight(fileContent, lang) : []), [supported, fileContent, lang]);
+  const tokens = useMemo(() => (supported ? highlight(displayContent, lang) : []), [supported, displayContent, lang]);
 
   return (
-    <div
-      className="af-toolblock"
-      style={{
-      display: 'block',
-      width: '100%',
-      maxWidth: '100%',
-      boxSizing: 'border-box',
-      borderRadius: 10,
-      border: '1px solid var(--af-border)',
-      background: 'var(--bg-inset)',
-      overflowX: 'auto',
-      overflowY: 'hidden',
-      marginBottom: 4
-    }}>
-      {/* Header: 📝 write: filePath */}
-      <div style={{
-        padding: '5px 10px',
-        background: 'var(--bg-panel)',
-        borderBottom: '1px solid var(--af-border)',
-        fontSize: 12,
-        fontFamily: 'monospace',
-        color: '#fbbf24',
-        fontWeight: 700,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis'
-      }}>
-        {extIcon(filePath)}
-        <span style={{ color: '#fbbf24' }}>write:</span> {filePath || 'file'}
-      </div>
-      {/* Khung code nền tối, scroll tối đa 600px */}
-      <div style={{
-        maxHeight: 600,
-        overflowY: 'auto',
-        overflowX: 'auto',
-        width: '100%',
+    <div style={{ width: '100%', boxSizing: 'border-box' }}>
+      <pre style={{
+        margin: 0,
+        padding: '8px 12px',
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+        fontSize: 11.5,
+        fontWeight: 500,
+        lineHeight: 1.48,
+        letterSpacing: '0.2px',
+        WebkitFontSmoothing: 'antialiased',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        color: 'var(--text-primary)',
         maxWidth: '100%',
-        boxSizing: 'border-box',
-        background: 'var(--bg-inset)'
+        boxSizing: 'border-box'
       }}>
-        <pre style={{
-          margin: 0,
-          padding: '8px 10px',
-          fontFamily: 'monospace',
-          fontSize: 12,
-          lineHeight: 1.55,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          color: 'var(--text-primary)',
-          maxWidth: '100%',
-          boxSizing: 'border-box'
-        }}>
-          {supported ? (
-            <code>{tokens.map((t, i) => (
-              <span
-                key={i}
-                style={{
-                  color: t.color || undefined,
-                  fontStyle: t.italic ? 'italic' : undefined,
-                  fontWeight: t.bold ? 700 : undefined
-                }}
-              >
-                {t.text}
-              </span>
-            ))}</code>
-          ) : (
-            fileContent || '(empty)'
-          )}
-        </pre>
-      </div>
-      {/* Footer: badge thành công + nút mở rộng/thu gọn */}
+        {supported ? (
+          <code>{tokens.map((t, i) => (
+            <span
+              key={i}
+              style={{
+                color: t.color || undefined,
+                fontStyle: t.italic ? 'italic' : undefined,
+                fontWeight: t.bold ? 700 : undefined
+              }}
+            >
+              {t.text}
+            </span>
+          ))}</code>
+        ) : (
+          displayContent || '(empty)'
+        )}
+      </pre>
+      {/* Footer: badge thành công */}
       <div style={{
         padding: '4px 10px 6px',
         fontSize: 11,
@@ -1185,10 +1218,11 @@ function WriteFileViewer({ input, output }: { input?: string; output?: string })
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
+        borderTop: '1px solid var(--af-border)',
         gap: 8
       }}>
         <span>✓ Ghi file thành công</span>
-        <span style={{ color: '#94a3b8' }}>{lineCount} dòng</span>
+        <span style={{ color: 'var(--text-muted)' }}>{lineCount} dòng</span>
       </div>
     </div>
   );
@@ -1196,7 +1230,7 @@ function WriteFileViewer({ input, output }: { input?: string; output?: string })
 
 // ============ READ FILE VIEWER ============
 // Hiển thị kết quả tool read dạng khung file đẹp: bỏ XML thô (<path>/<content>), có header đường dẫn.
-function ReadFileViewer({ input, output }: { input?: string; output?: string }) {
+function ReadFileViewer({ input, output, isMobile }: { input?: string; output?: string; isMobile?: boolean }) {
   const rawOut = typeof output === 'string' ? stripAnsi(output) : '';
   const rawInp = typeof input === 'string' ? stripAnsi(input) : '';
 
@@ -1223,81 +1257,52 @@ function ReadFileViewer({ input, output }: { input?: string; output?: string }) 
   const nm = rawOut.match(/\((Showing lines[\s\S]*?)\)/i);
   const note = nm ? nm[1].trim() : '';
 
+  // USER: giới hạn tối đa 90 dòng hiển thị (cắt TRƯỚC khi highlight)
+  const clamped = clampToolLines(code);
+  const displayCode = clamped.text;
+
   // Syntax highlight: lang từ filePath → highlight như CodeBlock; fallback plain nếu không hỗ trợ
   const lang = langFromPath(filePath);
   const supported = useMemo(() => isSupportedLang(lang), [lang]);
-  const tokens = useMemo(() => (supported ? highlight(code, lang) : []), [supported, code, lang]);
+  const tokens = useMemo(() => (supported ? highlight(displayCode, lang) : []), [supported, displayCode, lang]);
 
   return (
-    <div
-      className="af-toolblock"
-      style={{
-      display: 'block',
-      width: '100%',
-      boxSizing: 'border-box',
-      borderRadius: 10,
-      border: '1px solid var(--af-border)',
-      background: 'var(--bg-inset)',
-      overflow: 'hidden',
-      marginBottom: 4
-    }}>
-      {/* Header: 📁 filePath */}
-      <div style={{
-        padding: '5px 10px',
-        background: 'var(--bg-panel)',
-        borderBottom: '1px solid var(--af-border)',
-        fontSize: 12,
-        fontFamily: 'monospace',
-        color: 'var(--text-muted)',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis'
-      }}>
-        {extIcon(filePath)} {filePath || 'file'}
-      </div>
-      {/* Khung code nền tối, scroll tối đa 600px */}
-      <div style={{
-        maxHeight: 600,
-        overflowY: 'auto',
-        overflowX: 'auto',
-        width: '100%',
+    <div style={{ width: '100%', boxSizing: 'border-box' }}>
+      <pre style={{
+        margin: 0,
+        padding: '8px 12px',
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+        fontSize: 11.5,
+        fontWeight: 500,
+        lineHeight: 1.48,
+        letterSpacing: '0.2px',
+        WebkitFontSmoothing: 'antialiased',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        color: 'var(--text-primary)',
         maxWidth: '100%',
-        boxSizing: 'border-box',
-        background: 'var(--bg-inset)'
+        boxSizing: 'border-box'
       }}>
-        <pre style={{
-          margin: 0,
-          padding: '8px 10px',
-          fontFamily: 'monospace',
-          fontSize: 12,
-          lineHeight: 1.55,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          color: 'var(--text-primary)',
-          maxWidth: '100%',
-          boxSizing: 'border-box'
-        }}>
-          {supported ? (
-            <code>{tokens.map((t, i) => (
-              <span
-                key={i}
-                style={{
-                  color: t.color || undefined,
-                  fontStyle: t.italic ? 'italic' : undefined,
-                  fontWeight: t.bold ? 700 : undefined
-                }}
-              >
-                {t.text}
-              </span>
-            ))}</code>
-          ) : (
-            code || rawOut || '(empty)'
-          )}
-        </pre>
-      </div>
+        {supported ? (
+          <code>{tokens.map((t, i) => (
+            <span
+              key={i}
+              style={{
+                color: t.color || undefined,
+                fontStyle: t.italic ? 'italic' : undefined,
+                fontWeight: t.bold ? 700 : undefined
+              }}
+            >
+              {t.text}
+            </span>
+          ))}</code>
+        ) : (
+          displayCode || rawOut || '(empty)'
+        )}
+      </pre>
       {/* Dòng tóm tắt chân khung */}
       {note && (
-        <div style={{ padding: '4px 10px 6px', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+        <div style={{ padding: '4px 10px 6px', fontSize: 10.5, color: 'var(--text-muted)', fontFamily: 'monospace', borderTop: '1px solid var(--af-border)' }}>
           {note}
         </div>
       )}
@@ -1317,7 +1322,9 @@ function BashCommandViewer({ input, output }: { input?: string; output?: string 
   if (!command && typeof input === 'string' && input.trim()) {
     command = input.trim();
   }
-  const outText = typeof output === 'string' ? output : '';
+  const rawOutText = typeof output === 'string' ? output : '';
+  // USER: giới hạn tối đa 90 dòng hiển thị (cắt output trước khi render ANSI)
+  const outText = clampToolLines(rawOutText).text;
 
   return (
     <div
@@ -1327,40 +1334,47 @@ function BashCommandViewer({ input, output }: { input?: string; output?: string 
       width: '100%',
       boxSizing: 'border-box',
       borderRadius: 10,
-      border: '1px solid var(--af-border)',
-      background: 'var(--bg-inset)',
+      border: '1px solid var(--toolblock-border, var(--af-border))',
+      background: 'var(--toolblock-bg, var(--bg-card))',
+      boxShadow: 'var(--toolblock-shadow, 0 4px 20px rgba(0, 0, 0, 0.35))',
       overflow: 'hidden',
-      marginBottom: 4
+      marginBottom: 6
     }}>
-      <div style={{ padding: '8px 10px' }}>
-        {/* Prompt line: $ command */}
-        <div style={{
-          color: '#38bdf8',
-          fontWeight: 600,
-          fontFamily: 'monospace',
-          fontSize: 12,
-          marginBottom: outText ? 8 : 0,
-          wordBreak: 'break-all'
-        }}>
-          $ {command}
-        </div>
-        {/* Output: giữ màu ANSI, scroll tối đa 600px */}
-        {outText && (
-          <div style={{
-            maxHeight: 600,
-            overflowY: 'auto',
-            overflowX: 'auto',
-            width: '100%',
-            maxWidth: '100%',
-            boxSizing: 'border-box',
-            fontFamily: 'monospace',
-            fontSize: 12,
-            lineHeight: 1.55
-          }}>
-            <AnsiRenderer text={outText} />
-          </div>
-        )}
+      {/* Header Prompt bar */}
+      <div style={{
+        padding: '5px 9px',
+        background: 'var(--toolblock-head-bg, var(--bg-input))',
+        borderBottom: '1px solid var(--toolblock-head-border, var(--af-border))',
+        color: '#4ade80',
+        fontWeight: 600,
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+        fontSize: 11.5,
+        wordBreak: 'break-all'
+      }}>
+        <span style={{ color: '#4ade80', fontWeight: 600, fontSize: 11 }}>$</span> <span style={{ color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{command}</span>
       </div>
+      {/* Output: giữ màu ANSI trên nền tối sâu, scroll tối đa 600px */}
+      {outText && (
+        <div style={{
+          maxHeight: 600,
+          overflowY: 'auto',
+          overflowX: 'auto',
+          width: '100%',
+          maxWidth: '100%',
+          boxSizing: 'border-box',
+          background: 'var(--toolblock-code-bg, var(--bg-inset))',
+          padding: '8px 12px',
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+          fontSize: 11.5,
+          fontWeight: 500,
+          lineHeight: 1.48,
+          letterSpacing: '0.2px',
+          WebkitFontSmoothing: 'antialiased',
+          color: 'var(--text-primary)'
+        }}>
+          <AnsiRenderer text={outText} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1382,9 +1396,12 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
   }
   if (!pattern && rawInp.trim()) pattern = rawInp.trim();
 
-  const rows = rawOut.split(/\r?\n/)
+  const allRows = rawOut.split(/\r?\n/)
     .map(l => l.replace(ANSI_NOISE_RE, '').replace(/[\u001b\u009b]/g, ''))
     .filter(l => l.trim() !== '');
+  // USER: giới hạn tối đa 90 dòng hiển thị kết quả tìm kiếm
+  const rows = allRows.slice(0, MAX_TOOL_LINES);
+  const rowCut = allRows.length - rows.length;
 
   return (
     <div
@@ -1395,26 +1412,27 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
       maxWidth: '100%',
       boxSizing: 'border-box',
       borderRadius: 10,
-      border: '1px solid var(--af-border)',
-      background: 'var(--bg-inset)',
+      border: '1px solid var(--toolblock-border, var(--af-border))',
+      background: 'var(--toolblock-bg, var(--bg-card))',
+      boxShadow: 'var(--toolblock-shadow, 0 4px 20px rgba(0, 0, 0, 0.35))',
       overflowX: 'auto',
       overflowY: 'hidden',
-      marginBottom: 4
+      marginBottom: 6
     }}>
       {/* Header: 🔍 TOOL pattern: "..." in path */}
       <div style={{
-        padding: '6px 10px',
-        background: 'var(--bg-panel)',
-        borderBottom: '1px solid var(--af-border)',
-        color: '#38bdf8',
+        padding: '5px 9px',
+        background: 'var(--toolblock-head-bg, var(--bg-input))',
+        borderBottom: '1px solid var(--toolblock-head-border, var(--af-border))',
+        color: 'var(--text-primary)',
         fontWeight: 600,
-        fontFamily: 'monospace',
-        fontSize: 12,
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+        fontSize: 11.5,
         wordBreak: 'break-all'
       }}>
-        🔍 {String(tool).toUpperCase()}{pattern ? ` pattern: "${pattern}"` : ''}{sPath ? ` in ${sPath}` : ''}{include ? ` · ${include}` : ''}
+        <span style={{ color: '#22d3ee', fontWeight: 600, fontSize: 11 }}>🔍 {String(tool).toUpperCase()}</span> <span style={{ color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{pattern ? ` pattern: "${pattern}"` : ''}{sPath ? ` in ${sPath}` : ''}{include ? ` · ${include}` : ''}{rowCut > 0 ? ` · (${rowCut} dòng bị cắt, tổng ${allRows.length})` : ''}</span>
       </div>
-      {/* Danh sách kết quả — nền tối GitHub, scroll 600px */}
+      {/* Danh sách kết quả — scroll 600px */}
       <div style={{
         maxHeight: 600,
         overflowY: 'auto',
@@ -1422,18 +1440,19 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
-        background: 'var(--bg-inset)'
+        background: 'var(--toolblock-code-bg, var(--bg-inset))',
+        padding: '6px 4px'
       }}>
         {rows.length === 0 ? (
-          <div style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: 12, color: '#6b7280' }}>(no results)</div>
+          <div style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11.5, color: 'var(--text-muted)' }}>(no results)</div>
         ) : rows.map((l, i) => {
           // grep -n style: "path/file.tsx:580:nội dung"
           const fm = l.match(/^([^\s:]+\.[A-Za-z0-9]{1,6}):(\d+):(.*)$/);
           if (fm) {
             return (
-              <div key={i} style={{ display:'flex', gap:8, padding:'1px 10px', fontFamily:'monospace', fontSize:12, lineHeight:1.55 }}>
-                <span style={{ color:'#6b7280', flexShrink:0 }}>📄 {fm[1]}</span>
-                <span style={{ color:'#6b7280', flexShrink:0, minWidth:44, textAlign:'right' }}>{fm[2]}</span>
+              <div key={i} style={{ display:'flex', gap:8, padding:'2px 8px', fontFamily:"'JetBrains Mono', monospace", fontSize:11.5, fontWeight:500, lineHeight:1.48 }}>
+                <span style={{ color:'#38bdf8', flexShrink:0 }}>📄 {fm[1]}</span>
+                <span style={{ color:'var(--text-muted)', flexShrink:0, minWidth:44, textAlign:'right' }}>{fm[2]}</span>
                 <span style={{ color:'var(--text-primary)', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{fm[3]}</span>
               </div>
             );
@@ -1442,8 +1461,8 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
           const lm = l.match(/^(?:Line\s*)?(\d+)\s*[:：]\s*([\s\S]*)$/i);
           if (lm) {
             return (
-              <div key={i} style={{ display:'flex', gap:8, padding:'1px 10px', fontFamily:'monospace', fontSize:12, lineHeight:1.55 }}>
-                <span style={{ color:'#6b7280', flexShrink:0, minWidth:36, textAlign:'right' }}>{lm[1]}</span>
+              <div key={i} style={{ display:'flex', gap:8, padding:'2px 8px', fontFamily:"'JetBrains Mono', monospace", fontSize:11.5, fontWeight:500, lineHeight:1.48 }}>
+                <span style={{ color:'var(--text-muted)', flexShrink:0, minWidth:36, textAlign:'right' }}>{lm[1]}</span>
                 <span style={{ color:'var(--text-primary)', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{lm[2]}</span>
               </div>
             );
@@ -1451,7 +1470,7 @@ function SearchCommandViewer({ tool, input, output }: { tool: string; input?: st
           // đường dẫn file / thư mục trần
           const isFile = /\.[A-Za-z0-9]{1,6}$/.test(l.trim()) && !l.includes(' ');
           return (
-            <div key={i} style={{ padding:'1px 10px', fontFamily:'monospace', fontSize:12, lineHeight:1.55, color:'var(--text-primary)' }}>
+            <div key={i} style={{ padding:'2px 8px', fontFamily:"'JetBrains Mono', monospace", fontSize:11.5, fontWeight:500, lineHeight:1.48, color:'var(--text-primary)' }}>
               {isFile ? `📄 ${l.trim()}` : (/\.[A-Za-z0-9]{1,6}/.test(l) || l.includes('/') || l.includes('\\') ? `📁 ${l.trim()}` : l)}
             </div>
           );
@@ -1481,7 +1500,7 @@ class ToolBlockSafe extends Component<{ children: React.ReactNode }, { hasError:
           background: 'var(--bg-inset)',
           padding: '8px 10px',
           fontFamily: 'monospace',
-          fontSize: 12,
+          fontSize: 11,
           color: 'var(--text-muted)',
           marginBottom: 4
         }}>
@@ -1533,6 +1552,9 @@ const TODO_PRIORITY_BADGE: Record<string, React.CSSProperties> = {
 function TodoListViewer({ input, output }: { input?: string; output?: string }) {
   let todos = parseTodosFrom(output);
   if (todos.length === 0) todos = parseTodosFrom(input);
+  // USER: giới hạn tối đa 90 todo hiển thị
+  const todoCut = todos.length - MAX_TOOL_LINES;
+  const shownTodos = todos.slice(0, MAX_TOOL_LINES);
   return (
     <div style={{
       width: '100%', boxSizing: 'border-box', borderRadius: 10,
@@ -1546,7 +1568,7 @@ function TodoListViewer({ input, output }: { input?: string; output?: string }) 
         borderBottom: '1px solid var(--af-border)',
         fontSize: 11, fontWeight: 700, color: '#a5b4fc'
       }}>
-        📋 Task Checklist ({todos.length} tasks)
+        📋 Task Checklist ({todos.length} tasks){todoCut > 0 ? ` · (${todoCut} bị cắt)` : ''}
       </div>
       {/* Danh sach todo */}
       <div style={{
@@ -1558,7 +1580,7 @@ function TodoListViewer({ input, output }: { input?: string; output?: string }) 
             (không parse được danh sách todo từ dữ liệu tool)
           </div>
         )}
-        {todos.map((t: any, i: number) => {
+        {shownTodos.map((t: any, i: number) => {
           const status = String(t?.status || 'pending').toLowerCase();
           const icon = TODO_STATUS_ICON[status] || '⬜';
           const pr = String(t?.priority || '').toLowerCase();
@@ -1597,7 +1619,145 @@ function TodoListViewer({ input, output }: { input?: string; output?: string }) 
   );
 }
 
-function ToolCallBlock({ tool, input, output }: ToolCallData) {
+function renderToolBadge(tool: string, parsedInput: any, safeInput: string): React.ReactNode {
+  const norm = String(tool || '').toLowerCase().trim();
+
+  // Extract file path if present
+  const filePath = (parsedInput && (typeof parsedInput.filePath === 'string' ? parsedInput.filePath : (typeof parsedInput.path === 'string' ? parsedInput.path : ''))) || '';
+
+  if (norm === 'edit') {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        {extIcon(filePath)}
+        <span style={{ color: '#fb923c', fontWeight: 600, fontSize: 11 }}>Edit:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{filePath || 'file'}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'write' || norm === 'write_file' || norm === 'writefile' || norm === 'create_file' || norm === 'write_to_file' || norm === 'writefile') {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        {extIcon(filePath)}
+        <span style={{ color: '#fde047', fontWeight: 600, fontSize: 11 }}>Write:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{filePath || 'file'}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'read') {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        {extIcon(filePath)}
+        <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>Read:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{filePath || 'file'}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'bash' || norm === 'shell' || norm === 'cmd') {
+    const cmd = (parsedInput && (typeof parsedInput.command === 'string' ? parsedInput.command : (typeof parsedInput.cmd === 'string' ? parsedInput.cmd : ''))) || safeInput || '';
+    const cleanCmd = cmd.trim().replace(/\r?\n/g, ' ');
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>💻</span>
+        <span style={{ color: '#4ade80', fontWeight: 600, fontSize: 11 }}>Bash:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5, maxWidth: 360 }}>{cleanCmd || 'command'}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'glob') {
+    const pattern = (parsedInput && typeof parsedInput.pattern === 'string' ? parsedInput.pattern : '') || '';
+    const path = (parsedInput && typeof parsedInput.path === 'string' ? parsedInput.path : '') || '';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>📁</span>
+        <span style={{ color: '#22d3ee', fontWeight: 600, fontSize: 11 }}>Glob:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{pattern || '*'}{path ? ` in ${path}` : ''}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'grep') {
+    const pattern = (parsedInput && typeof parsedInput.pattern === 'string' ? parsedInput.pattern : '') || '';
+    const path = (parsedInput && typeof parsedInput.path === 'string' ? parsedInput.path : '') || '';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>🔍</span>
+        <span style={{ color: '#f472b6', fontWeight: 600, fontSize: 11 }}>Grep:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>/{pattern}/{path ? ` in ${path}` : ''}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'searcher' || norm === 'search') {
+    const query = (parsedInput && (typeof parsedInput.pattern === 'string' ? parsedInput.pattern : (typeof parsedInput.query === 'string' ? parsedInput.query : ''))) || '';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>🔍</span>
+        <span style={{ color: '#f472b6', fontWeight: 600, fontSize: 11 }}>Search:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{query || 'query'}</span>
+      </span>
+    );
+  }
+
+  if (norm.includes('fetch') || norm.includes('webfetch')) {
+    const url = (parsedInput && (typeof parsedInput.url === 'string' ? parsedInput.url : (typeof parsedInput.link === 'string' ? parsedInput.link : ''))) || '';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>🌐</span>
+        <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>Fetch:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5, maxWidth: 320 }}>{url || 'url'}</span>
+      </span>
+    );
+  }
+
+  if (norm.includes('web_search') || norm.includes('websearch')) {
+    const query = (parsedInput && (typeof parsedInput.query === 'string' ? parsedInput.query : (typeof parsedInput.q === 'string' ? parsedInput.q : ''))) || '';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>🌐</span>
+        <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>WebSearch:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{query || 'search'}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'todowrite' || norm.includes('todo')) {
+    const count = Array.isArray(parsedInput?.todos) ? parsedInput.todos.length : '';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>📋</span>
+        <span style={{ color: '#fb923c', fontWeight: 600, fontSize: 11 }}>TodoList:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{count ? `${count} tasks` : 'update'}</span>
+      </span>
+    );
+  }
+
+  if (norm === 'skill') {
+    const name = (parsedInput && typeof parsedInput.name === 'string' ? parsedInput.name : '') || '';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+        <span>⚡</span>
+        <span style={{ color: '#facc15', fontWeight: 600, fontSize: 11 }}>Skill:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{name || 'custom'}</span>
+      </span>
+    );
+  }
+
+  // Fallback
+  const target = filePath || (parsedInput && typeof parsedInput.target === 'string' ? parsedInput.target : '') || '';
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+      <span>🔧</span>
+      <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>{String(tool || 'tool')}:</span>
+      {target && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{target}</span>}
+    </span>
+  );
+}
+
+function ToolCallBlock({ tool, input, output, isMobile }: ToolCallData & { isMobile?: boolean }) {
   // FIX CRASH toLowerCase: tool có thể undefined khi payload lỗi → bọc an toàn 100%
   const safeTool = String(tool || 'unknown').toLowerCase();
   // Input: strip toàn bộ (dùng để parse JSON diff). Output: GIỮ mã màu SGR cho AnsiRenderer
@@ -1613,7 +1773,10 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
     safeInput ? `▶ input:\n${safeInput}` : '',
     rawOutput ? `◀ output:\n${rawOutput}` : ''
   ].filter(Boolean).join('\n\n');
-  const lineCount = Math.max(1, content.split('\n').length);
+  // USER: giới hạn tối đa 90 dòng hiển thị (cắt content dùng cho lineCount/fallback)
+  const clampedContent = clampToolLines(content);
+  const displayContent = clampedContent.text;
+  const lineCount = Math.max(1, displayContent.split('\n').length);
 
   // Git-style diff cho tool edit: parse input lấy {filePath, oldString, newString}
   const parsedInput = parseToolInputObject(safeInput);
@@ -1621,29 +1784,61 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
     safeTool === 'edit' ||
     !!(parsedInput && ('oldString' in parsedInput || 'newString' in parsedInput));
 
-  // WriteFileViewer cho tool write
-  const isWriteView = safeTool === 'write';
-
   // ReadFileViewer cho tool read (hoặc output chứa khối <content>)
   const isReadView = safeTool === 'read' || /<content>/i.test(rawOutput);
 
+  // WriteFileViewer cho tool write / write_file / create_file
+  const isWriteView =
+    safeTool === 'write' ||
+    safeTool === 'write_file' ||
+    safeTool === 'writefile' ||
+    safeTool === 'create_file' ||
+    safeTool === 'write_to_file' ||
+    (!isEditDiff && !isReadView && parsedInput && typeof parsedInput.filePath === 'string' && typeof parsedInput.content === 'string');
   // BashCommandViewer cho tool bash/shell — dạng terminal $ command + output màu
   const isBashView = safeTool === 'bash' || safeTool === 'shell';
 
   // SearchCommandViewer cho glob/grep/searcher — GitHub-style kết quả tìm kiếm
   const isSearchView = safeTool === 'glob' || safeTool === 'grep' || safeTool === 'searcher';
 
+  // Edit: lang từ filePath → syntax highlight cho dòng THÊM (+), giống Write/Read (fallback plain).
+  const editFilePath = parsedInput && typeof parsedInput.filePath === 'string' ? parsedInput.filePath : '';
+  const editLang = langFromPath(editFilePath);
+  const editSupported = useMemo(() => isSupportedLang(editLang), [editLang]);
+
+  const targetFilePath =
+    editFilePath ||
+    (parsedInput && (typeof parsedInput.filePath === 'string' ? parsedInput.filePath : (typeof parsedInput.path === 'string' ? parsedInput.path : ''))) ||
+    '';
+  const targetLang = targetFilePath ? langFromPath(targetFilePath) : '';
+
   const oldLines: string[] =
     isEditDiff && parsedInput && typeof parsedInput.oldString === 'string' && parsedInput.oldString !== ''
-      ? parsedInput.oldString.split('\n')
+      ? clampToolLines(parsedInput.oldString).text.split('\n')
       : [];
   const newLines: string[] =
     isEditDiff && parsedInput && typeof parsedInput.newString === 'string' && parsedInput.newString !== ''
-      ? parsedInput.newString.split('\n')
+      ? clampToolLines(parsedInput.newString).text.split('\n')
       : [];
 
-  // Mặc định EXPAND (hiện full nội dung như hành vi cũ) — user bấm/click header để thu gọn
-  const [expanded, setExpanded] = useState(true);
+  // Mặc định COLLAPSED (thu gọn, hiện hint click để mở) — user bấm/click header để mở rộng.
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const copyText =
+      isEditDiff && parsedInput && typeof parsedInput.newString === 'string'
+        ? parsedInput.newString
+        : (isWriteView && parsedInput && typeof parsedInput.content === 'string')
+        ? parsedInput.content
+        : rawOutput || safeInput || content;
+    if (!copyText) return;
+    navigator.clipboard.writeText(copyText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
 
   return (
     <div
@@ -1654,13 +1849,14 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
       maxWidth: '100%',
       boxSizing: 'border-box',
       borderRadius: 10,
-      border: '1px solid var(--af-border)',
-      background: 'var(--bg-inset)',
+      border: '1px solid var(--toolblock-border, var(--af-border))',
+      background: 'var(--toolblock-bg, var(--bg-card))',
+      boxShadow: 'var(--toolblock-shadow, 0 4px 20px rgba(0, 0, 0, 0.35))',
       overflowX: 'auto',
       overflowY: 'hidden',
-      marginBottom: 4
+      marginBottom: 6
     }}>
-      {/* Header: badge tên tool + nút thu gọn/mở rộng. Click toàn header để toggle */}
+      {/* Header DUY NHẤT 1 DÒNG: badge tên tool + target path + lang + nút Copy + nút Thu/Phóng */}
       <div
         className="af-toolblock-head"
         onClick={() => setExpanded(e => !e)}
@@ -1673,67 +1869,92 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
         justifyContent: 'space-between',
         gap: 8,
         padding: '5px 10px',
-        background: 'var(--bg-panel)',
-        borderBottom: expanded ? '1px solid var(--af-border)' : 'none',
+        background: 'var(--toolblock-head-bg, var(--bg-input))',
+        borderBottom: expanded ? '1px solid var(--toolblock-head-border, var(--af-border))' : 'none',
         position: 'sticky',
         top: 0,
         cursor: 'pointer',
         userSelect: 'none'
       }}>
+        {/* Bên trái: Badge loại tool + Tên/Đường dẫn tệp tin */}
         <span style={{
           display: 'inline-flex',
           alignItems: 'center',
           gap: 5,
-          fontSize: 10,
-          fontWeight: 700,
-          color: '#93c5fd',
-          background: 'rgba(59,130,246,0.12)',
-          border: '1px solid rgba(59,130,246,0.3)',
+          fontSize: 11,
+          fontWeight: 600,
+          background: 'rgba(255, 255, 255, 0.05)',
+          border: '1px solid var(--af-border)',
           borderRadius: 9999,
-          padding: '1px 8px',
+          padding: '2px 8px',
           fontFamily: 'monospace',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
-          textOverflow: 'ellipsis'
+          textOverflow: 'ellipsis',
+          maxWidth: '70%'
         }}>
-          🔧 {String(tool || 'unknown')}
+          {renderToolBadge(safeTool, parsedInput, safeInput)}
         </span>
-        <span
-          onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
-          style={{
-            background: 'rgba(148,163,184,0.1)',
-            border: '1px solid rgba(148,163,184,0.25)',
-            color: '#cbd5e1',
-            borderRadius: 4,
-            padding: '1px 8px',
-            fontSize: 10,
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            flexShrink: 0
-          }}
-          role="button"
-          aria-label={expanded ? 'Thu gọn' : 'Mở rộng'}
-        >
-          {expanded ? 'Collapse' : `Expand (${lineCount} dòng)`}
-        </span>
-      </div>
-      {/* Khi collapsed: hiện 1 dòng gợi ý click để mở */}
-      {!expanded && (
-        <div
-          style={{
-            padding: '6px 10px',
-            color: 'var(--text-muted)',
-            fontSize: 11,
-            fontFamily: 'monospace',
-            opacity: 0.8
-          }}
-        >
-          <span onClick={(e) => { e.stopPropagation(); setExpanded(true); }} style={{ cursor: 'pointer', color: 'inherit' }}>
-            ▼ {String(tool || 'unknown')} — click để mở ({lineCount} dòng)
+
+        {/* Bên phải: Ngôn ngữ nhỏ gọn + Nút Copy + Nút Thu/Phóng */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {targetLang && (
+            <span style={{
+              fontSize: 9.5,
+              fontWeight: 700,
+              padding: '1px 5px',
+              borderRadius: 3,
+              background: 'rgba(255, 255, 255, 0.08)',
+              color: 'var(--text-secondary)',
+              fontFamily: 'monospace',
+              textTransform: 'uppercase'
+            }}>
+              {targetLang}
+            </span>
+          )}
+          <button
+            onClick={handleCopy}
+            style={{
+              background: copied ? 'rgba(34, 197, 94, 0.15)' : 'rgba(148, 163, 184, 0.12)',
+              border: copied ? '1px solid rgba(34, 197, 94, 0.35)' : '1px solid var(--af-border)',
+              color: copied ? '#4ade80' : 'var(--text-secondary)',
+              borderRadius: 4,
+              padding: '1px 6px',
+              fontSize: 10,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              fontFamily: 'monospace',
+              fontWeight: 600,
+              transition: 'all 0.15s ease'
+            }}
+            title="Sao chép nội dung"
+          >
+            <span>{copied ? '✓' : '📋'}</span>
+            <span>{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+          <span
+            onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
+            style={{
+              background: 'rgba(148, 163, 184, 0.15)',
+              border: '1px solid rgba(148, 163, 184, 0.3)',
+              color: 'var(--text-primary)',
+              borderRadius: 4,
+              padding: '1px 6px',
+              fontSize: 10,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'monospace'
+            }}
+            role="button"
+            aria-label={expanded ? 'Thu gọn' : 'Mở rộng'}
+          >
+            {expanded ? 'Collapse' : `Expand (${lineCount} dòng)`}
           </span>
         </div>
-      )}
-      {/* Body: monospace 12px, scroll tối đa 280px khi mở */}
+      </div>
+      {/* Body: monospace 11.5px, scroll tối đa 600px khi mở */}
       {expanded && (
         <div
           className="af-toolblock-body"
@@ -1744,37 +1965,53 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
           width: '100%',
           maxWidth: '100%',
           boxSizing: 'border-box',
-          padding: '8px 10px',
-          fontFamily: 'monospace',
-          fontSize: 12,
-          lineHeight: 1.55,
+          padding: '8px 12px',
+          background: 'var(--toolblock-code-bg, var(--bg-inset))',
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+          fontSize: 11.5,
+          fontWeight: 500,
+          lineHeight: 1.48,
+          letterSpacing: '0.2px',
+          WebkitFontSmoothing: 'antialiased',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
-          color: 'var(--text-secondary)'
+          color: 'var(--text-primary)'
         }}>
           {isEditDiff && parsedInput && ((oldLines.length > 0 || newLines.length > 0) || typeof parsedInput.filePath === 'string') ? (
-            /* GIT-STYLE DIFF VIEW (context-aware) — chốt cứng maxHeight 600 + scroll */
+            /* GIT-STYLE DIFF VIEW (context-aware) — không lặp lại header file */
             <div style={{ maxHeight: 600, overflowY: 'auto', overflowX: 'auto', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
-              {typeof parsedInput.filePath === 'string' && parsedInput.filePath !== '' && (
-                <div style={{ padding: '4px 8px 6px', color: '#94a3b8', fontFamily: 'monospace', fontSize: 12 }}>
-                  📁 {parsedInput.filePath}
-                </div>
-              )}
               {computeDiffRows(
                 oldLines.join('\n'),
                 newLines.join('\n')
               ).map((row, i) =>
                 row.type === 'ctx'
                   ? <ContextLine key={`c${i}`} text={row.text} />
-                  : <DiffLine key={`d${i}`} sign={row.type === 'del' ? '-' : '+'} text={row.text} />
+                  : <DiffLine key={`d${i}`} sign={row.type === 'del' ? '-' : '+'} text={row.text}
+                      tokens={row.type === 'add' && editSupported ? highlight(row.text, editLang) : undefined} />
               )}
+              {/* Footer trạng thái: badge thành công + số dòng thêm/xóa */}
+              <div style={{
+                padding: '4px 10px 6px',
+                fontSize: 11,
+                color: '#86efac',
+                fontFamily: 'monospace',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8
+              }}>
+                <span>✓ Sửa file thành công</span>
+                <span style={{ color: '#94a3b8' }}>
+                  +{newLines.length} −{oldLines.length} dòng
+                </span>
+              </div>
             </div>
           ) : isWriteView ? (
             /* WRITE FILE VIEWER — header nổi bật + expand/collapse + badge thành công */
-            <WriteFileViewer input={safeInput} output={rawOutput} />
+            <WriteFileViewer input={safeInput} output={rawOutput} isMobile={isMobile} />
           ) : isReadView ? (
             /* READ FILE VIEWER — khung file đẹp thay XML thô */
-            <ReadFileViewer input={safeInput} output={rawOutput} />
+            <ReadFileViewer input={safeInput} output={rawOutput} isMobile={isMobile} />
           ) : isBashView ? (
             /* BASH COMMAND VIEWER — $ command + output màu ANSI */
             <BashCommandViewer input={safeInput} output={rawOutput} />
@@ -1782,7 +2019,7 @@ function ToolCallBlock({ tool, input, output }: ToolCallData) {
             /* SEARCH COMMAND VIEWER — GitHub-style cho glob/grep/searcher */
             <SearchCommandViewer tool={tool} input={safeInput} output={rawOutput} />
           ) : (
-            content ? <AnsiRenderer text={content} /> : '(empty)'
+            content ? <AnsiRenderer text={displayContent} /> : '(empty)'
           )}
         </div>
       )}
@@ -1962,6 +2199,8 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   let sender = msg.from;
   let senderColor = '#38bdf8';
   let roleBadge = '';
+  let srcAgent: AgentInfo | undefined;
+  let targetAgent: AgentInfo | undefined;
 
   if (isError) {
     sender = 'System Error';
@@ -1985,7 +2224,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     roleBadge = msg.agentRole || 'agent';
     senderColor = '#34d399';
   } else {
-    const srcAgent = agents.find(a => a.id === msg.from || a.name === msg.from);
+    srcAgent = agents.find(a => a.id === msg.from || a.name === msg.from);
     if (srcAgent) {
       sender = srcAgent.name;
       roleBadge = srcAgent.role || 'agent';
@@ -2031,7 +2270,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   let body = rawContent
     .replace(/^\s*(?:\[FROM:\s*[^\]]+\]\s*)?\[TO:\s*[^\]]+\]\s*/iu, '')
     .replace(/^\s*<talk\b[^>]*>\s*/iu, '');
-  body = stripTalkTags(body);
+  body = isUser ? body : stripTalkTags(body);
   if (isOrchestratorInternal && !msg.showOnUI) {
     body = '_(Internal orchestrator planning hidden)_';
   }
@@ -2045,12 +2284,28 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     } else if (effectiveTo === 'user') {
       displayTo = 'You';
     } else {
-      const targetAgent = agents.find(a => a?.id === effectiveTo || ((a?.name || '').toLowerCase() === String(effectiveTo).toLowerCase()));
+      targetAgent = agents.find(a => a?.id === effectiveTo || ((a?.name || '').toLowerCase() === String(effectiveTo).toLowerCase()));
       if (targetAgent) {
         displayTo = targetAgent.name;
       }
     }
   }
+
+  // Resolve task label for header with full defensive guards
+  let rawTaskStr = '';
+  if (typeof (msg as any)?.task === 'string' && (msg as any).task.trim()) {
+    rawTaskStr = (msg as any).task;
+  } else if (typeof (msg as any)?.taskName === 'string' && (msg as any).taskName.trim()) {
+    rawTaskStr = (msg as any).taskName;
+  } else if (srcAgent && srcAgent.type !== 'orchestrator' && srcAgent.id !== 'orchestrator' && typeof srcAgent.task === 'string' && srcAgent.task.trim()) {
+    rawTaskStr = srcAgent.task;
+  } else if (targetAgent && targetAgent.type !== 'orchestrator' && targetAgent.id !== 'orchestrator' && typeof targetAgent.task === 'string' && targetAgent.task.trim()) {
+    rawTaskStr = targetAgent.task;
+  }
+
+  const cleanTaskTitle = rawTaskStr
+    ? rawTaskStr.split('\n')[0].replace(/^#?\d+[\.:\s-]*\s*/, '').replace(/^\[(?:working|pending|completed|blocked)\]\s*/i, '').replace(/^(?:⚙️|⏳|✅|⚠️|⚡|🎯)\s*/, '').trim()
+    : '';
 
   // Visual Bubble Themes — Full Flat Conversation Style (Cursor / Claude / v0 style)
   let bubbleBg = 'transparent';
@@ -2116,6 +2371,17 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     return null;
   }
 
+  // Guard tin nhắn rỗng: nếu sau khi làm sạch không còn conversationText, không có report,
+  // không có body, không có thinking, không có toolCalls và không có parts -> ẨN TOÀN BỘ MessageItem,
+  // tránh sinh ra header mồ côi (chỉ hiện tên người gửi mà không có bong bóng nội dung nào).
+  const hasAnyThinking = typeof msg.thinking === 'string' && msg.thinking.trim().length > 0;
+  const hasAnyText = !!(conversationText && conversationText.trim()) || !!(hasReport && reportContent && reportContent.trim()) || !!(body && body.trim());
+  const hasAnyContent = hasAnyText || hasAnyThinking || hasToolBlocks || hasParts;
+
+  if (!hasAnyContent) {
+    return null;
+  }
+
   return (
     <div
       className="fade-in"
@@ -2124,56 +2390,125 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         flexDirection: 'column',
         alignItems: isUser ? 'flex-end' : 'flex-start',
         minWidth: 0,
-        overflowWrap: 'anywhere'
+        overflowWrap: 'anywhere',
+        // Fix copy 6.33: chặn selection lan sang cả khối (sender header/tool thinking header là
+        // tiện ích không cần copy). Root kế thừa none; các bubble content element bên dưới
+        // override userSelect:'text' để user vẫn chọn được đúng text tin nhắn, không nhảy ra
+        // toàn bộ panel/block khi kéo qua nhiều tin liền kề.
+        userSelect: 'none'
       }}
     >
-      {/* Sender Header */}
+      {/* Sender Header: Clean, Spacious, High-Contrast Routing Pills */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
         gap: 8,
         fontSize: 11,
-        color: senderColor,
-        marginBottom: 4,
+        marginBottom: 6,
         fontWeight: 600,
-        paddingLeft: isUser ? 0 : 4,
-        paddingRight: isUser ? 4 : 0,
-        flexDirection: isUser ? 'row-reverse' : 'row'
+        paddingLeft: isUser ? 0 : 2,
+        paddingRight: isUser ? 2 : 0,
+        flexDirection: isUser ? 'row-reverse' : 'row',
+        flexWrap: 'nowrap',
+        overflowX: 'auto',
+        maxWidth: '100%',
+        scrollbarWidth: 'none'
       }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {/* Sender Capsule Pill */}
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '3px 10px',
+          borderRadius: 9999,
+          fontSize: 11,
+          fontWeight: 700,
+          whiteSpace: 'nowrap',
+          background: isUser
+            ? 'rgba(59, 130, 246, 0.22)'
+            : isOrchestrator
+            ? 'rgba(99, 102, 241, 0.22)'
+            : 'rgba(16, 185, 129, 0.22)',
+          border: isUser
+            ? '1px solid rgba(96, 165, 250, 0.5)'
+            : isOrchestrator
+            ? '1px solid rgba(129, 140, 248, 0.5)'
+            : '1px solid rgba(52, 211, 153, 0.5)',
+          color: isUser ? '#dbeafe' : isOrchestrator ? '#e0e7ff' : '#d1fae5'
+        }}>
           {isOrchestrator && <span>👑</span>}
           {isUser && <span>👤</span>}
           {!isOrchestrator && !isUser && <span>🤖</span>}
           <span>{sender}</span>
+          {!isOrchestrator && !isUser && roleBadge && (
+            <span style={{ opacity: 0.85, fontWeight: 600, fontSize: 10 }}>· {roleBadge}</span>
+          )}
         </span>
 
-        {roleBadge && (
-          <span style={{
-            background: 'var(--accent-soft)',
-            padding: '1px 5px',
-            borderRadius: 4,
-            fontSize: 10,
-            fontWeight: 500,
-            color: 'var(--text-secondary)'
-          }}>
-            {roleBadge}
-          </span>
-        )}
-
+        {/* Direction Arrow & Receiver Capsule Pill */}
         {displayTo && (
-          <span style={{ color: 'var(--text-muted)', fontWeight: 400, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span>→</span>
-            <span style={{ color: 'var(--text-muted)' }}>{displayTo}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <span style={{ color: '#a5b4fc', fontWeight: 800, fontSize: 13, lineHeight: 1 }}>➜</span>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '3px 10px',
+              borderRadius: 9999,
+              fontSize: 11,
+              fontWeight: 700,
+              whiteSpace: 'nowrap',
+              background: 'rgba(148, 163, 184, 0.18)',
+              border: '1px solid rgba(203, 213, 225, 0.45)',
+              color: '#f8fafc'
+            }}>
+              {String(displayTo || '').toLowerCase() === 'you' || String(displayTo || '').toLowerCase() === 'user' ? <span>👤</span> : <span>🤖</span>}
+              <span>{displayTo}</span>
+            </span>
           </span>
         )}
 
+        {/* Task Capsule Pill */}
+        {cleanTaskTitle && (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '2px 8px',
+              borderRadius: 6,
+              background: 'rgba(59, 130, 246, 0.12)',
+              border: '1px solid rgba(59, 130, 246, 0.25)',
+              color: 'var(--af-primary, #60a5fa)',
+              fontSize: 11,
+              fontWeight: 500,
+              maxWidth: 280,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              flexShrink: 1
+            }}
+            title={`Nhiệm vụ: ${cleanTaskTitle}`}
+          >
+            <span>🎯</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {cleanTaskTitle}
+            </span>
+          </span>
+        )}
+
+        {/* Monospace Timestamp */}
         {formattedTime && (
           <span
             style={{
               color: 'var(--text-muted)',
               fontSize: 10,
-              fontWeight: 400,
-              fontFamily: 'monospace'
+              fontWeight: 500,
+              fontFamily: 'monospace',
+              opacity: 0.85,
+              flexShrink: 0,
+              marginLeft: isUser ? 0 : 4,
+              marginRight: isUser ? 4 : 0
             }}
             title={fullDateTime}
           >
@@ -2182,15 +2517,16 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         )}
       </div>
 
-      {/* Khối 1: Thinking (nếu có) — nằm riêng độc lập, NGOÀI bubble */}
+{/* Khối 1: Thinking (nếu có) — nằm riêng độc lập, NGOÀI bubble */}
       {typeof msg.thinking === 'string' && msg.thinking.trim() && (
         <div style={{
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
-          maxWidth: isMobile ? '96%' : '94%',
+          maxWidth: isMobile ? '98%' : '100%',
           alignSelf: isUser ? 'flex-end' : 'flex-start',
-          marginBottom: 4
+          marginBottom: 4,
+          userSelect: 'text'
         }}>
           <ThinkingBlock thinking={msg.thinking} />
         </div>
@@ -2202,9 +2538,10 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
-          maxWidth: isMobile ? '94%' : '85%',
+          maxWidth: isMobile ? '98%' : '100%',
           alignSelf: isUser ? 'flex-end' : 'flex-start',
-          marginBottom: 4
+          marginBottom: 4,
+          userSelect: 'text'
         }}>
           {(msg.toolCalls as any[]).map((tc, i) => {
             // Chuẩn hóa entry — entry lỗi định dạng không được làm sập panel
@@ -2215,7 +2552,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
             };
             return (
               <ToolBlockSafe key={safe.tool + '-' + i}>
-                <ToolCallBlock tool={safe.tool} input={safe.input} output={safe.output} />
+                <ToolCallBlock tool={safe.tool} input={safe.input} output={safe.output} isMobile={isMobile} />
               </ToolBlockSafe>
             );
           })}
@@ -2230,9 +2567,10 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
-          maxWidth: isMobile ? '96%' : '94%',
+          maxWidth: isMobile ? '98%' : '100%',
           alignSelf: isUser ? 'flex-end' : 'flex-start',
-          gap: 4
+          gap: 4,
+          userSelect: 'text'
         }}>
           {((msg as any).parts as any[]).map((part, i) => {
             if (!part) return null;
@@ -2243,15 +2581,33 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                 output: part.output === undefined || part.output === null ? undefined : String(part.output)
               };
               return (
-                <div key={'pt-' + i} style={{ width: '100%', maxWidth: isMobile ? '94%' : '88%' }}>
+                <div key={'pt-' + i} style={{ width: '100%', maxWidth: isMobile ? '98%' : '100%' }}>
                   <ToolBlockSafe>
-                    <ToolCallBlock tool={safeTool.tool} input={safeTool.input} output={safeTool.output} />
+                    <ToolCallBlock tool={safeTool.tool} input={safeTool.input} output={safeTool.output} isMobile={isMobile} />
                   </ToolBlockSafe>
                 </div>
               );
             }
-            const segText = String(part.content || '');
+            // Fix interleave 6.44 (rework 6.33): GIỮ render text segments của snapshot opencode trong
+            // Khối 2.5 để xen kẽ text + tool ĐÚNG thứ tự emit. Server giờ giữ text+tool trong parts.
+            // text không nhân đôi vì Khối 2 + Khối 3 bị ẩn khi hasParts, và canonical reply trùng được
+            // lọc ở agent view (App.tsx). Đoạn text dạng "TYPE: ..." (assistant/user/system metadata)
+            // được bỏ tiền tố TYPE để hiển thị sạch; event text thô giữ nguyên.
+            let segText = String(part.content || '');
             if (!segText) return null;
+            // Bỏ tiền tố "TYPE: " (ASSISTANT:/USER:/SYSTEM:...) trên segment text meta — hiển thị nội dung thật
+            if (isOpenCode && /^[A-Z_]+:\s/u.test(segText) && !/^✖|^◆/u.test(segText)) {
+              segText = segText.replace(/^[A-Z_]+:\s?/u, '');
+            }
+            if (!String(segText).trim()) return null;
+
+            // Bóc tách cấu trúc report nếu segment này chứa <report>...</report> hoặc === TASK REPORT ===
+            const segSplit = splitReportAndConversation(segText);
+            const segConvText = segSplit.conversationText;
+            const segHasReport = segSplit.hasReport;
+            const segReportTitle = segSplit.reportTitle;
+            const segReportContent = segSplit.reportContent;
+
             return (
               <div
                 key={'pt-' + i}
@@ -2266,8 +2622,8 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                 minWidth: 0,
                 overflowWrap: 'anywhere',
                 boxSizing: 'border-box',
-                fontSize: isOpenCode ? 12 : 13,
-                lineHeight: 1.6,
+                fontSize: isOpenCode ? 12 : (isMobile ? 12 : 12.5),
+                lineHeight: 1.45,
                 whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
                 fontFamily: isOpenCode ? 'monospace' : 'inherit',
                 border: (isUser || isOrchestratorTask) ? bubbleBorder : 'none',
@@ -2280,7 +2636,20 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                     {segText}
                   </div>
                 ) : (
-                  <MarkdownRenderer content={segText} />
+                  <>
+                    {segConvText ? <MarkdownRenderer content={segConvText} isMobile={isMobile} /> : null}
+                    {segHasReport && segReportContent ? (
+                      <div style={{ marginTop: segConvText ? 10 : 0 }}>
+                        <ReportCard
+                          title={segReportTitle || 'Structured Task Report'}
+                          content={segReportContent}
+                        />
+                      </div>
+                    ) : null}
+                    {!segConvText && !segHasReport && segText ? (
+                      <MarkdownRenderer content={segText} isMobile={isMobile} />
+                    ) : null}
+                  </>
                 )}
               </div>
             );
@@ -2298,87 +2667,22 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           padding: (isUser || isOrchestratorTask) ? '10px 14px' : '10px 0',
           borderRadius: 12,
           width: 'fit-content',
-          maxWidth: isMobile ? '94%' : '88%',
+          maxWidth: isMobile ? '98%' : '100%',
           minWidth: 0,
           overflowWrap: 'anywhere',
           boxSizing: 'border-box',
-          fontSize: isOpenCode ? 12 : 13,
-          lineHeight: 1.6,
+          fontSize: isOpenCode ? 12 : 12.5,
+          lineHeight: 1.45,
           whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
           fontFamily: isOpenCode ? 'monospace' : 'inherit',
           border: (isUser || isOrchestratorTask) ? bubbleBorder : 'none',
           boxShadow: (isUser || isOrchestratorTask) ? bubbleShadow : 'none',
           wordBreak: 'break-word',
-          position: 'relative'
+          position: 'relative',
+          userSelect: 'text'
         }}>
           {isOrchestratorTask ? (
-            <>
-              <div style={{
-                display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8,
-                fontSize: 11, fontWeight: 700,
-                color: '#a5b4fc', marginBottom: 6,
-                letterSpacing: '-0.01em'
-              }}>
-                <span style={{ flexShrink: 0 }}>📋</span>
-                <span
-                  style={{
-                    background: 'rgba(99, 102, 241, 0.16)',
-                    color: '#c7d2fe',
-                    borderRadius: 5,
-                    padding: '2px 7px',
-                    fontSize: 10.5,
-                    fontWeight: 700,
-                    letterSpacing: '0.02em',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  Giao việc
-                </span>
-                <span style={{ color: '#8b9bb4', fontWeight: 600 }}>Orchestrator</span>
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    color: '#818cf8',
-                    fontWeight: 800,
-                    fontSize: 14,
-                    lineHeight: 1,
-                    flexShrink: 0
-                  }}
-                  aria-hidden="true"
-                >
-                  ➜
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <span
-                    style={{
-                      fontSize: 9.5,
-                      color: '#8b9bb4',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.03em'
-                    }}
-                  >
-                    Gửi đến
-                  </span>
-                  <span
-                    style={{
-                      background: 'rgba(99, 102, 241, 0.28)',
-                      color: '#e0e7ff',
-                      borderRadius: 5,
-                      padding: '2px 8px',
-                      fontSize: 10.5,
-                      fontWeight: 800,
-                      border: '1px solid rgba(129, 140, 248, 0.5)',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {displayTo || 'Agent'}
-                  </span>
-                </span>
-              </div>
-              <MarkdownRenderer content={conversationText || body} />
-            </>
+            <MarkdownRenderer content={conversationText || body} isMobile={isMobile} />
           ) : isOpenCode ? (
             <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               {body}
@@ -2386,7 +2690,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           ) : (
             <>
               {conversationText ? (
-                <MarkdownRenderer content={conversationText} />
+                <MarkdownRenderer content={conversationText} isMobile={isMobile} />
               ) : null}
               {hasReport && reportContent ? (
                 <div style={{ marginTop: conversationText ? 10 : 0 }}>
@@ -2397,7 +2701,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                 </div>
               ) : null}
               {!conversationText && !hasReport && body ? (
-                <MarkdownRenderer content={body} />
+                <MarkdownRenderer content={body} isMobile={isMobile} />
               ) : null}
             </>
           )}
@@ -2429,6 +2733,8 @@ interface Props {
   showToolBlocks?: boolean;
   queuedMessages?: ChatMsg[];
   onFlushQueue?: () => void;
+  onClearQueue?: () => void;
+  onRemoveQueueItem?: (index: number) => void;
 }
 
 export function ChatPanel({
@@ -2449,6 +2755,8 @@ export function ChatPanel({
   isMobile = false,
   queuedMessages = [],
   onFlushQueue,
+  onClearQueue,
+  onRemoveQueueItem,
   connStatus,
   offlineForText,
   uptimeText,
@@ -2462,7 +2770,7 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const initialLoadRef = useRef(true);
-  const AUTO_SCROLL_THRESHOLD = 80;
+  const AUTO_SCROLL_THRESHOLD = 150;
 
   // ============ VIRTUALIZED TAIL WINDOW ============
   // Chỉ render N tin nhắn MỚI NHẤT khi vào hội thoại → load nhanh (<150ms) kể cả history dài.
@@ -2556,8 +2864,16 @@ export function ChatPanel({
     if (!el) return;
 
     if (changed && isNearBottomRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-      setShowScrollBtn(false);
+      // Mobile: KHÔNG auto-scroll smooth khi đang gõ (bàn phím mở làm layout viewport đổi → giật).
+      // Giữ vị trí typing ổn định; user vẫn kéo tay hoặc dùng nút ↓ (showScrollBtn) khi cần.
+      const activeEl = document.activeElement as HTMLElement | null;
+      const typingOnMobile = isMobile && activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT');
+      if (typingOnMobile) {
+        setShowScrollBtn(true); // có tin mới mà đang gõ → nhá nút ↓ để user tự kéo khi xong
+      } else {
+        el.scrollTo({ top: el.scrollHeight, behavior: isMobile ? 'auto' : 'smooth' });
+        setShowScrollBtn(false);
+      }
     }
   }, [lastMsgSig, displayMessages.length]);
 
@@ -2627,35 +2943,50 @@ const handleSend = () => {
 
   return (
     <div className="af-chatpanel" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-main)' }}>
-      {/* Header */}
+      {/* Header: fixed 48px, nowrap, overflow-x auto, compact badges */}
       <div className="af-chat-header" style={{
-        padding: isMobile ? '10px 12px' : '12px 20px',
+        padding: isMobile ? '8px 12px 8px 56px' : '8px 16px',
         borderBottom: '1px solid var(--af-border)',
         background: 'var(--bg-panel)',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        flexWrap: 'wrap',
+        flexWrap: 'nowrap',
+        height: 48,
+        minHeight: 48,
+        boxSizing: 'border-box',
         gap: 8,
-        boxShadow: 'var(--shadow-panel)'
+        boxShadow: 'var(--shadow-panel)',
+        overflowX: 'auto',
+        overflowY: 'hidden',
+        scrollbarWidth: 'none'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexShrink: 1 }}>
           <div style={{
-            width: 34,
-            height: 34,
-            borderRadius: 8,
+            width: 30,
+            height: 30,
+            borderRadius: 7,
             background: 'linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: 16,
-            boxShadow: '0 2px 6px rgba(79, 70, 229, 0.3)'
+            fontSize: 15,
+            boxShadow: '0 2px 6px rgba(79, 70, 229, 0.3)',
+            flexShrink: 0
           }}>
             💬
           </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span className="af-chat-title" style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
+          <div style={{ minWidth: 0, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
+              <span className="af-chat-title" style={{
+                fontSize: 13.5,
+                fontWeight: 600,
+                color: 'var(--text-primary)',
+                letterSpacing: '-0.01em',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}>
                 {title || 'Orchestrator'}
               </span>
 
@@ -2665,13 +2996,15 @@ const handleSend = () => {
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
-                  padding: '2px 8px',
+                  padding: '1px 7px',
                   borderRadius: 9999,
                   background: status === 'working' ? 'rgba(34, 197, 94, 0.15)' : status === 'error' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(100, 116, 139, 0.15)',
                   border: `1px solid ${status === 'working' ? 'rgba(34, 197, 94, 0.35)' : status === 'error' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(100, 116, 139, 0.25)'}`,
                   fontSize: 10,
                   fontWeight: 600,
-                  color: status === 'working' ? '#4ade80' : status === 'error' ? '#f87171' : '#94a3b8'
+                  color: status === 'working' ? '#4ade80' : status === 'error' ? '#f87171' : '#94a3b8',
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap'
                 }}>
                   <span
                     className={status === 'working' ? 'pulsing-green' : status === 'error' ? 'pulsing-red' : ''}
@@ -2692,14 +3025,16 @@ const handleSend = () => {
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
-                  padding: '2px 8px',
+                  padding: '1px 7px',
                   borderRadius: 9999,
                   background: 'rgba(99, 102, 241, 0.12)',
                   border: '1px solid rgba(99, 102, 241, 0.3)',
                   color: '#a5b4fc',
                   fontSize: 10,
                   fontWeight: 500,
-                  fontFamily: 'monospace'
+                  fontFamily: 'monospace',
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap'
                 }}>
                   <span>🧠</span>
                   <span>{model}</span>
@@ -2712,14 +3047,16 @@ const handleSend = () => {
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
-                  padding: '2px 8px',
+                  padding: '1px 7px',
                   borderRadius: 9999,
                   background: 'rgba(56, 189, 248, 0.12)',
                   border: '1px solid rgba(56, 189, 248, 0.3)',
                   color: '#38bdf8',
                   fontSize: 10,
                   fontWeight: 600,
-                  fontFamily: 'monospace'
+                  fontFamily: 'monospace',
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap'
                 }}
                 title={tooltipText}
               >
@@ -2727,86 +3064,88 @@ const handleSend = () => {
                 <span>{formattedTokens} tokens{formattedCost ? ` | ${formattedCost}` : ''}</span>
               </div>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
-              Interactive Chat Session
-            </div>
           </div>
         </div>
 
-        {/* Connection Status Badge (WS) */}
-        {connStatus && (
-          <div
-            className={connStatus === 'disconnected' ? 'af-conn-badge-off' : undefined}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '4px 10px',
-              borderRadius: 9999,
-              background: connStatus === 'connected' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.15)',
-              border: `1px solid ${connStatus === 'connected' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.45)'}`,
-              fontSize: 11,
-              fontWeight: 600,
-              color: connStatus === 'connected' ? '#4ade80' : '#f87171',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            <span
-              className={connStatus === 'connected' ? 'pulsing-green' : 'pulsing-red'}
+        {/* Right side controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {/* Connection Status Badge (WS) */}
+          {connStatus && (
+            <div
+              className={connStatus === 'disconnected' ? 'af-conn-badge-off' : undefined}
               style={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                backgroundColor: connStatus === 'connected' ? '#22c55e' : '#ef4444',
-                display: 'inline-block'
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '3px 8px',
+                borderRadius: 9999,
+                background: connStatus === 'connected' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.15)',
+                border: `1px solid ${connStatus === 'connected' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.45)'}`,
+                fontSize: 10.5,
+                fontWeight: 600,
+                color: connStatus === 'connected' ? '#4ade80' : '#f87171',
+                whiteSpace: 'nowrap',
+                flexShrink: 0
               }}
-            />
-            <span>
-              {connStatus === 'connected'
-                ? `🟢 Live WS${uptimeText ? ` (${uptimeText})` : ''}`
-                : `🔴 Offline${offlineForText ? ` (${offlineForText} trước)` : ''}`}
-            </span>
-          </div>
-        )}
+            >
+              <span
+                className={connStatus === 'connected' ? 'pulsing-green' : 'pulsing-red'}
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  backgroundColor: connStatus === 'connected' ? '#22c55e' : '#ef4444',
+                  display: 'inline-block'
+                }}
+              />
+              <span>
+                {connStatus === 'connected'
+                  ? `Live WS${uptimeText ? ` (${uptimeText})` : ''}`
+                  : `Offline${offlineForText ? ` (${offlineForText} trước)` : ''}`}
+              </span>
+            </div>
+          )}
 
-        {onClear && (
-          <button
-            onClick={() => {
-              if (window.confirm('Bạn có chắc muốn xóa toàn bộ cuộc trò chuyện?')) {
-                onClear();
-              }
-            }}
-            style={{
-              background: 'rgba(239, 68, 68, 0.1)',
-              color: '#f87171',
-              border: '1px solid rgba(239, 68, 68, 0.25)',
-              borderRadius: 6,
-              padding: '6px 12px',
-              fontSize: 12,
-              cursor: 'pointer',
-              fontWeight: 600,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              transition: 'all 0.2s'
-            }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
-              e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.25)';
-            }}
-          >
-            <span>🗑️</span>
-            <span>Clear Chat</span>
-          </button>
-        )}
+          {onClear && (
+            <button
+              onClick={() => {
+                if (window.confirm('Bạn có chắc muốn xóa toàn bộ cuộc trò chuyện?')) {
+                  onClear();
+                }
+              }}
+              style={{
+                background: 'rgba(239, 68, 68, 0.1)',
+                color: '#f87171',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                borderRadius: 6,
+                padding: '4px 10px',
+                fontSize: 11.5,
+                cursor: 'pointer',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                whiteSpace: 'nowrap',
+                flexShrink: 0
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
+                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.25)';
+              }}
+            >
+              <span>🗑️</span>
+              <span>Clear Chat</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} onScroll={handleScroll} className="af-chat-scroll" style={{ flex: 1, overflow: 'auto', minWidth: 0, padding: isMobile ? '14px 10px' : '24px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div ref={scrollRef} onScroll={handleScroll} className="af-chat-scroll" style={{ flex: 1, overflow: 'auto', minWidth: 0, padding: isMobile ? '8px 6px' : '14px 16px', display: 'flex', flexDirection: 'column', gap: 8, userSelect: 'none' }}>
         {displayMessages.length === 0 ? (
           <div style={{
             textAlign: 'center',
@@ -2915,7 +3254,7 @@ const handleSend = () => {
             }}
             style={{
               position: 'absolute',
-              bottom: '80px',
+              bottom: '90px',
               right: '24px',
               zIndex: 10,
               borderRadius: '50%',
@@ -2938,16 +3277,132 @@ const handleSend = () => {
           </button>
         )}
 
-        <div ref={bottomRef} />
+        <div ref={bottomRef} style={{ height: 24, flexShrink: 0 }} />
       </div>
 
-      {/* Input */}
+      {/* Input & Queue Bubble */}
       <div className="af-chat-input" style={{
-        padding: isMobile ? '10px 12px' : '16px 20px',
-        paddingBottom: isMobile ? 'calc(10px + env(safe-area-inset-bottom))' : 16,
+        padding: isMobile ? '8px 10px' : '12px 18px',
+        paddingBottom: isMobile ? 'calc(8px + env(safe-area-inset-bottom))' : 12,
         borderTop: '1px solid var(--af-border)',
-        background: 'var(--bg-panel)'
+        background: 'var(--bg-panel)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        position: 'relative'
       }}>
+        {/* Floating Queue Bubble docked directly above the typing box */}
+        {queuedMessages.length > 0 && (
+          <div style={{
+            background: 'var(--bg-inset, #121824)',
+            border: '1px solid rgba(59, 130, 246, 0.35)',
+            borderRadius: 'var(--radius-md)',
+            padding: '8px 12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            boxShadow: '0 4px 18px rgba(0, 0, 0, 0.3)',
+            animation: 'fadeIn 0.2s ease-in-out'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 13 }}>📨</span>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--wb-info, #38bdf8)' }}>
+                  Hàng đợi tin nhắn ({queuedMessages.length})
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {onFlushQueue && (
+                  <button
+                    onClick={onFlushQueue}
+                    style={{
+                      background: 'rgba(16, 185, 129, 0.18)',
+                      border: '1px solid rgba(52, 211, 153, 0.4)',
+                      color: '#6ee7b7',
+                      borderRadius: 4,
+                      padding: '2px 8px',
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                    title="Gộp gửi toàn bộ hàng đợi ngay lập tức"
+                  >
+                    ⚡ Gửi hết
+                  </button>
+                )}
+                {onClearQueue && (
+                  <button
+                    onClick={onClearQueue}
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.15)',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      color: '#f87171',
+                      borderRadius: 4,
+                      padding: '2px 8px',
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                    title="Xóa toàn bộ hàng đợi"
+                  >
+                    🗑️ Xóa hết
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* List of queued items */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 120, overflowY: 'auto' }}>
+              {queuedMessages.map((q, i) => {
+                const tgtAgent = agents.find(a => a.id === q.to);
+                const tgtName = q.to === 'orchestrator' || !q.to ? 'Orchestrator' : (tgtAgent ? tgtAgent.name : q.to);
+                return (
+                  <div key={`${q.id}-${i}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, fontSize: 11, background: 'rgba(255, 255, 255, 0.03)', padding: '3px 6px', borderRadius: 4, border: '1px solid var(--af-border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        padding: '1px 5px',
+                        borderRadius: 3,
+                        background: 'rgba(99, 102, 241, 0.18)',
+                        border: '1px solid rgba(129, 140, 248, 0.4)',
+                        color: '#c7d2fe',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        flexShrink: 0
+                      }}>
+                        Gửi tới: {q.to === 'orchestrator' || !q.to ? '👑' : '🤖'} {tgtName}
+                      </span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', flex: 1 }}>
+                        {q.content.slice(0, 100)}
+                      </span>
+                    </div>
+                    {onRemoveQueueItem && (
+                      <button
+                        onClick={() => onRemoveQueueItem(i)}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          color: 'var(--wb-danger, #f87171)',
+                          cursor: 'pointer',
+                          padding: '1px 4px',
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                          flexShrink: 0
+                        }}
+                        title="Xóa tin này khỏi hàng đợi"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
           <textarea
             value={input}

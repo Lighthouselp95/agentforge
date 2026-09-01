@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { ChatPanel } from './components/ChatPanel';
 import { SpawnDialog } from './components/SpawnDialog';
 import { ModelSettingsDialog } from './components/ModelSettingsDialog';
 import { TabBar } from './components/TabBar';
+import { parseAgentTaskList, renderAgentTaskList, ParsedAgentTask } from './utils/taskUtils';
 
 const API = window.location.port === '5173' ? '' : (window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:3001');
 
@@ -12,6 +13,7 @@ interface ChatMsg {
   from: string;
   to: string;
   content: string;
+  task?: string;
   timestamp?: number;
   agentName?: string;
   agentRole?: string;
@@ -22,6 +24,7 @@ interface ChatMsg {
   // Ordered parts (Option C): text + tool xen kẽ theo ĐÚNG thứ tự opencode emit — server gửi trong final snapshot.
   // Client render trực tiếp theo array, không cần split content. OPTIONAL (không có → render theo cách cũ).
   parts?: Array<{ type: 'text' | 'tool'; content?: string; tool?: string; input?: string; output?: string }>;
+  teamId?: string;
 }
 
 export interface TokenUsage {
@@ -38,6 +41,7 @@ interface Agent {
   type: string;
   status: string;
   task?: string;
+  tasks?: Array<{ id?: string; task: string; status: string }>;
   spawnedBy?: string;
   sessionId?: string;
   sessionTitle?: string;
@@ -46,6 +50,7 @@ interface Agent {
   workingSince?: number;
   tokenUsage?: TokenUsage | number;
   contextLength?: number;
+  teamId?: string;
 }
 
 export function App() {
@@ -104,7 +109,7 @@ export function App() {
     } catch {}
   };
   const [loading, setLoading] = useState(false);
-  const [queuedMessages, setQueuedMessages] = useState<ChatMsg[]>([]);
+  const [agentQueues, setAgentQueues] = useState<Record<string, ChatMsg[]>>({});
   const lastSendAtRef = useRef(0);
   // In-flight per-target: agentId -> đang gửi queued message. Thay gate loading GLOBAL (theo tab hiện tại)
   // bằng check riêng theo agent đích của queue để tin queue không bị giữ lại khi chuyển tab.
@@ -112,7 +117,7 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('agentforge_sidebar_width');
-      return saved ? Math.max(240, Math.min(600, parseInt(saved, 10))) : 320;
+      return saved ? Math.max(220, Math.min(650, parseInt(saved, 10))) : 320;
     } catch {
       return 320;
     }
@@ -130,8 +135,18 @@ export function App() {
   // Workbench (VS Code-like) layout state
   const [activeView, setActiveView] = useState<'agents' | 'files' | 'settings'>('agents');
   const [panelOpen, setPanelOpen] = useState(false);
-  const [panelHeight, setPanelHeight] = useState(160);
+  const [showWorkingPopover, setShowWorkingPopover] = useState(false);
+  const [panelHeight, setPanelHeight] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('agentforge_panel_height') || '', 10);
+      return Number.isFinite(v) ? Math.max(120, Math.min(240, v)) : 160;
+    } catch { return 160; }
+  });
   const [activityLog, setActivityLog] = useState<{ id: string; agentId: string; name: string; status: string; ts: number }[]>([]);
+
+  // Fix underbar 6.43: KHÔNG tự mở bottom panel khi hàng đợi/agent working.
+  // Panel chỉ mở khi user CHỦ ĐỘNG toggle (nút "▸/▾ Hoạt động & Hàng đợi" ở status bar).
+  // Trước đây effect này tự setPanelOpen(true) khi queue 0->>0 → đẩy/bóp khung chat khó chịu.
 
   // Áp theme lên <html data-theme> + lưu lựa chọn (reload giữ nguyên)
   useEffect(() => {
@@ -262,14 +277,14 @@ export function App() {
   };
 
   // Tạo/lấy tin nhắn stream của 1 agent rồi mutate nội dung (dùng cho chat:chunk / chat:tool_call)
-  const upsertStreamMsg = (key: string, mut: (m: ChatMsg) => ChatMsg) => {
+  const upsertStreamMsg = (key: string, mut: (m: ChatMsg) => ChatMsg, teamId?: string) => {
     setAllMessages(prev => {
       let sid = streamRef.current[key];
       let list = prev;
       if (!sid || !prev.some(p => p.id === sid)) {
         sid = `stream-${key}-${Date.now()}`;
         streamRef.current[key] = sid;
-        list = [...prev, { id: sid, from: key, to: 'user', content: '', timestamp: Date.now() }];
+        list = [...prev, { id: sid, from: key, to: 'user', content: '', timestamp: Date.now(), teamId }];
       }
       return list.map(m => m.id === sid ? mut(m) : m);
     });
@@ -283,7 +298,7 @@ export function App() {
     if (msg.type === 'chat:chunk' && typeof msg.textDelta === 'string') {
       const key = String(msg.agentId || msg.from || 'orchestrator');
       const delta = msg.textDelta;
-      upsertStreamMsg(key, m => ({ ...m, content: (m.content || '') + delta }));
+      upsertStreamMsg(key, m => ({ ...m, content: (m.content || '') + delta }), msg.teamId);
     }
 
     // Thinking realtime: chat:thinking { agentId?, from?, thinkingText } — hiện hộp thinking live
@@ -291,7 +306,7 @@ export function App() {
     // chờ snapshot cuối (fix: text tới trước, thinking tới sau dù model reasoning trước).
     if (msg.type === 'chat:thinking' && typeof msg.thinkingText === 'string' && msg.thinkingText.trim()) {
       const key = String(msg.agentId || msg.from || 'orchestrator');
-      upsertStreamMsg(key, m => ({ ...m, thinking: (m.thinking ? m.thinking + '\n' : '') + msg.thinkingText }));
+      upsertStreamMsg(key, m => ({ ...m, thinking: (m.thinking ? m.thinking + '\n' : '') + msg.thinkingText }), msg.teamId);
     }
 
     // Tool call realtime: chat:tool_call { agentId?, toolCall? | tool/input/output }
@@ -315,21 +330,38 @@ export function App() {
        console.log('received chat:message content:', m.content);
       const fkey = String(m.from || '');
       let staleThinking: string | undefined;
-      // Snapshot opencode content cố ý rỗng (text đã đi qua chat:chunk) — không phải tin final.
+      // Snapshot opencode (msgType==='opencode') content cố ý rỗng — merge thinking/tool.
+      // Final reply rỗng (msgType≠opencode, VD lệnh điều phối bị strip) → không merge, gỡ stream + thay tin rỗng.
       const isOpenEmptySnapshot = !m.content || !String(m.content).trim();
       let mergedIntoStream = false;
       if (fkey && streamRef.current[fkey]) {
         const staleId = streamRef.current[fkey];
-        if (isOpenEmptySnapshot) {
+        if (isOpenEmptySnapshot && m.msgType === 'opencode') {
           // Snapshot trung gian content rỗng: CỘNG thinking/toolCalls vào bản stream đang chứa
           // text tích lũy THAY VÌ xóa + thay rỗng → text biến mất thành thinking không còn xảy ra.
           // Bản stream vẫn sống chờ tin final (có content đầy đủ) tới để thay thế.
-          mergedIntoStream = true;
-          setAllMessages(prev => prev.map(x => x.id !== staleId ? x : {
-            ...x,
-            thinking: m.thinking ? (x.thinking ? x.thinking + '\n' + m.thinking : m.thinking) : x.thinking,
-            toolCalls: (m.toolCalls && m.toolCalls.length) ? [...(x.toolCalls || []), ...m.toolCalls] : x.toolCalls
-          }));
+          // FIX raw-wrap 6.40: snapshot rỗng KHÔNG kèm thinking mới && KHÔNG toolCalls mới
+          // = final reply đã bị strip hết lệnh điều phối (content trống) → xóa bubble stream
+          // rác đang giữ thẻ <talk>/<spawn> thô, thay bằng bubble rỗng thay vì giữ vĩnh viễn.
+          const hasNewThinking = !!(m.thinking && String(m.thinking).trim());
+          const hasNewToolCalls = !!(m.toolCalls && m.toolCalls.length);
+          if (!hasNewThinking && !hasNewToolCalls) {
+            delete streamRef.current[fkey];
+            mergedIntoStream = true;
+            setAllMessages(prev => prev.map(x => x.id !== staleId ? x : {
+              ...x,
+              thinking: undefined,
+              content: '',
+              toolCalls: undefined
+            }));
+          } else {
+            mergedIntoStream = true;
+            setAllMessages(prev => prev.map(x => x.id !== staleId ? x : {
+              ...x,
+              thinking: m.thinking ? (x.thinking ? x.thinking + '\n' + m.thinking : m.thinking) : x.thinking,
+              toolCalls: (m.toolCalls && m.toolCalls.length) ? [...(x.toolCalls || []), ...m.toolCalls] : x.toolCalls
+            }));
+          }
         } else {
           // Tin cuối (canonical final) có content đầy đủ -> gỡ bản stream tạm để không trùng nội dung
           delete streamRef.current[fkey];
@@ -359,7 +391,8 @@ export function App() {
                 msgType: m.msgType,
                 toolCalls: m.toolCalls,
                 thinking: m.thinking || staleThinking,
-                parts: m.parts
+                parts: m.parts,
+                teamId: m.teamId
               };
               return next;
             }
@@ -375,7 +408,8 @@ export function App() {
             msgType: m.msgType,
             toolCalls: m.toolCalls,
             thinking: m.thinking || staleThinking,
-            parts: m.parts
+            parts: m.parts,
+            teamId: m.teamId
           }];
           return nextList.length > MAX_DISPLAY_MESSAGES ? nextList.slice(-MAX_DISPLAY_MESSAGES) : nextList;
         });
@@ -557,8 +591,8 @@ export function App() {
     lastSendAtRef.current = Date.now();
     setAllMessages(prev => [...prev, qmsg]);
     setLoading(true);
-    const targetId = qmsg.to;
-    // Đánh dấu agent đích đang có 1 queued message in-flight (thay cho gate loading global theo tab)
+    const targetId = qmsg.to || 'orchestrator';
+    // Đánh dấu agent đích đang có 1 queued message in-flight
     inflightTargetRef.current[targetId] = true;
     const done = () => { delete inflightTargetRef.current[targetId]; };
     try {
@@ -569,12 +603,13 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      const data = await res.json();
-      if (data.error) {
+      const data = await res.json().catch(() => null);
+      if (!data || data.error) {
         setAllMessages(prev => {
           const errId = `err-${Date.now()}`;
-          if (prev.some(p => p.content === `❌ Error: ${data.error}`)) return prev;
-          return [...prev, { id: errId, from: targetId, to: 'user', content: `❌ Error: ${data.error}`, timestamp: Date.now(), msgType: 'error' }];
+          const errMsg = data?.error || 'Phản hồi không hợp lệ từ máy chủ';
+          if (prev.some(p => p.content === `❌ Error: ${errMsg}`)) return prev;
+          return [...prev, { id: errId, from: targetId, to: 'user', content: `❌ Error: ${errMsg}`, timestamp: Date.now(), msgType: 'error' }];
         });
         setLoading(false);
         done();
@@ -586,42 +621,91 @@ export function App() {
     }
   };
 
-  // Drain queue khi server thực sự idle — gộp toàn bộ hàng đợi thành 1 lần gửi
-  const flushQueue = useCallback(() => {
-    if (queuedMessages.length === 0) return;
-    const all = [...queuedMessages];
-    setQueuedMessages([]);
-    const combined = all.length === 1 ? all[0].content : all.map((m,i)=>`[Message ${i+1}]:\n${m.content}`).join('\n\n---\n\n');
-    const batchMsg: ChatMsg = {
-      id: `temp-batch-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-      from: 'user',
-      to: all[0].to,
-      content: combined,
-      timestamp: Date.now()
-    };
-    sendQueuedMessage(batchMsg);
-  }, [queuedMessages]);
+  // Helper thêm tin vào hàng đợi riêng của từng agent
+  const enqueueMessage = useCallback((targetId: string, msg: ChatMsg) => {
+    setAgentQueues(prev => ({
+      ...prev,
+      [targetId]: [...(prev[targetId] || []), msg]
+    }));
+  }, []);
 
+  // Xả gộp và gửi hàng đợi cho riêng 1 Agent
+  const flushQueueForAgent = useCallback((targetId: string) => {
+    setAgentQueues(prev => {
+      const queue = prev[targetId] || [];
+      if (queue.length === 0) return prev;
+      const combined = queue.length === 1 ? queue[0].content : queue.map((m, i) => `[Message ${i + 1}]:\n${m.content}`).join('\n\n---\n\n');
+      const batchMsg: ChatMsg = {
+        id: `temp-batch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        from: 'user',
+        to: targetId,
+        content: combined,
+        timestamp: Date.now()
+      };
+      sendQueuedMessage(batchMsg);
+      const updated = { ...prev };
+      delete updated[targetId];
+      return updated;
+    });
+  }, []);
+
+  // Xóa riêng hàng đợi của 1 Agent
+  const clearQueueForAgent = useCallback((targetId: string) => {
+    setAgentQueues(prev => {
+      const updated = { ...prev };
+      delete updated[targetId];
+      return updated;
+    });
+  }, []);
+
+  // Xóa toàn bộ hàng đợi của tất cả agents
+  const clearAllQueues = useCallback(() => {
+    setAgentQueues({});
+  }, []);
+
+  // Auto-Drain Độc Lập 100%: Quét từng agent, nếu agent nào rảnh thì tự xả gửi tin mà KHÔNG bị nghẽn bởi agent khác
   useEffect(() => {
-    if (queuedMessages.length === 0) return;
-    // Drain theo TARGET GỐC của tin queue (nextRaw.to) chứ KHÔNG phải tab hiện tại (selectedAgentId):
-    // fix bug tin queue bị GIỮ LẠI khi chuyển tab vì loading/busy của tab khác chặn drain.
-    const nextRaw = queuedMessages[0];
-    const tgtId = nextRaw.to || 'orchestrator';
-    const cur = agents.find(a => a.id === tgtId);
-    const targetBusy = cur ? cur.status === 'working' : false;
-    if (targetBusy) return;
-    // Gate in-flight theo agent đích (thay cho gate loading GLOBAL theo tab) — chống gửi 2 tin liên tiếp
-    if (inflightTargetRef.current[tgtId]) return;
-    const next: ChatMsg = { ...nextRaw, timestamp: Date.now() };
-    setQueuedMessages(prev => prev.slice(1));
-    sendQueuedMessage(next);
-  }, [queuedMessages, agents]);
+    const entries = Object.entries(agentQueues);
+    if (entries.length === 0) return;
+
+    for (const [tgtId, queue] of entries) {
+      if (!queue || queue.length === 0) continue;
+      
+      const cur = agents.find(a => a.id === tgtId);
+      const targetBusy = cur ? cur.status === 'working' : false;
+      
+      // Nếu agent đích đang bận -> giữ lại chờ riêng agent đó
+      if (targetBusy) continue;
+      
+      // Nếu agent đích KHÔNG bận nhưng cờ in-flight còn sót -> tự động dọn cờ
+      if (inflightTargetRef.current[tgtId]) {
+        delete inflightTargetRef.current[tgtId];
+      }
+      
+      const nextRaw = queue[0];
+      const next: ChatMsg = { ...nextRaw, timestamp: Date.now() };
+      
+      // Pop 1 tin khỏi hàng đợi của riêng agent đó
+      setAgentQueues(prev => {
+        const q = prev[tgtId] || [];
+        if (q.length <= 1) {
+          const updated = { ...prev };
+          delete updated[tgtId];
+          return updated;
+        }
+        return {
+          ...prev,
+          [tgtId]: q.slice(1)
+        };
+      });
+      
+      sendQueuedMessage(next);
+    }
+  }, [agentQueues, agents]);
 
   // Send message
-const sendMessage = async (text: string) => {
-     console.log('sendMessage text:', text);
-     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+  const sendMessage = async (text: string) => {
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const targetId = selectedAgentId || 'orchestrator';
     const userMsg: ChatMsg = {
       id: tempId,
@@ -630,16 +714,22 @@ const sendMessage = async (text: string) => {
       content: text,
       timestamp: Date.now()
     };
-    // Nếu đang bận thì cho vào hàng đợi UI — hiện ở queue bar trên khung typing
-    const curBusy = agents.find(a => a.id === (selectedAgentId || 'orchestrator'));
-    const isBusy = loading || (curBusy ? curBusy.status === 'working' : false);
-    if (isBusy) {
-      setQueuedMessages(prev => [...prev, userMsg]);
+    
+    // Hàng đợi riêng từng agent: Chỉ xếp hàng nếu chính Agent đích đang bận hoặc chính nó đã có hàng đợi
+    const curBusy = agents.find(a => a.id === targetId);
+    const isTargetBusy = curBusy ? curBusy.status === 'working' : false;
+    const targetQueue = agentQueues[targetId] || [];
+    const hasPendingQueue = targetQueue.length > 0;
+    
+    if (isTargetBusy || hasPendingQueue || inflightTargetRef.current[targetId]) {
+      enqueueMessage(targetId, userMsg);
       return;
     }
+    
     lastSendAtRef.current = Date.now();
     setAllMessages(prev => [...prev, userMsg]);
     setLoading(true);
+    inflightTargetRef.current[targetId] = true;
 
     try {
       const body: any = { message: text };
@@ -650,32 +740,21 @@ const sendMessage = async (text: string) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      const data = await res.json();
-      if (data.error) {
+      const data = await res.json().catch(() => null);
+      if (!data || data.error) {
         setAllMessages(prev => {
           const errId = `err-${Date.now()}`;
-          if (prev.some(p => p.content === `❌ Error: ${data.error}`)) return prev;
-          return [...prev, {
-            id: errId,
-            from: targetId,
-            to: 'user',
-            content: `❌ Error: ${data.error}`,
-            timestamp: Date.now(),
-            msgType: 'error'
-          }];
+          const errMsg = data?.error || 'Phản hồi không hợp lệ từ máy chủ';
+          if (prev.some(p => p.content === `❌ Error: ${errMsg}`)) return prev;
+          return [...prev, { id: errId, from: targetId, to: 'user', content: `❌ Error: ${errMsg}`, timestamp: Date.now(), msgType: 'error' }];
         });
         setLoading(false);
+        delete inflightTargetRef.current[targetId];
       }
     } catch (e: any) {
-      setAllMessages(prev => [...prev, {
-        id: `err-${Date.now()}`,
-        from: targetId,
-        to: 'user',
-        content: `❌ Connection error: ${e.message}`,
-        timestamp: Date.now(),
-        msgType: 'error'
-      }]);
+      setAllMessages(prev => [...prev, { id: `err-${Date.now()}`, from: targetId, to: 'user', content: `❌ Connection error: ${e.message}`, timestamp: Date.now(), msgType: 'error' }]);
       setLoading(false);
+      delete inflightTargetRef.current[targetId];
     }
   };
 
@@ -712,7 +791,39 @@ const sendMessage = async (text: string) => {
     return false;
   };
 
-  const filteredMessages = selectedAgentId
+  // Fix interleave 6.44: dedup canonical reply khi snapshot opencode đã có text parts (interleave đầy đủ)
+  const applyOacDedup = (list: typeof allMessages) => {
+    const stripTypePrefix = (s: string) => {
+      if (/^[A-Z_]+:\s/u.test(s) && !/^✖|^◆/u.test(s)) return s.replace(/^[A-Z_]+:\s?/u, '');
+      return s;
+    };
+    const out: typeof list = [];
+    // from → toàn bộ text parts (strip TYPE prefix) của snapshot opencode cuối, nối lại — để so khớp
+    // với canonical reply (vốn là tổng hợp mọi text event, không chỉ segment cuối).
+    const oacFullText = new Map<string, string>();
+    for (const m of list) {
+      const fkey = m.from || '';
+      if (m.msgType === 'opencode' && Array.isArray((m as any).parts)) {
+        const textParts = (m as any).parts.filter((p: any) => p && p.type === 'text' && String(p.content || '').trim().length > 0);
+        if (textParts.length > 0) {
+          oacFullText.set(fkey, textParts.map((p: any) => stripTypePrefix(String(p.content || ''))).join('\n').trim());
+        }
+        out.push(m);
+      } else if (m.msgType !== 'opencode' && m.content && String(m.content).trim().length > 0) {
+        const fullText = oacFullText.get(fkey);
+        if (fullText !== undefined && String(m.content).trim() === fullText) {
+          // drop redundant canonical reply — interleaved parts already cover this text
+        } else {
+          out.push(m);
+        }
+      } else {
+        out.push(m);
+      }
+    }
+    return out;
+  };
+
+  const filteredMessages = applyOacDedup(selectedAgentId
     ? (() => {
         const sel = agents.find(a => a.id === selectedAgentId);
         const isSubOrch = sel?.type === 'orchestrator' || sel?.role === 'orchestrator';
@@ -720,8 +831,9 @@ const sendMessage = async (text: string) => {
           if (isSystemMsg(m)) return false;
           if (isSubOrch) {
             if (m.msgType === 'opencode') {
-              // Live stream từ stdio: hiển thị khi có text/thinking, ẩn event tool-only
-              return !!(m.content || m.thinking || (m.toolCalls && m.toolCalls.length > 0) || (m.parts && m.parts.length > 0));
+              // Live stream từ stdio: chỉ hiển thị snapshot của CHÍNH agent đang xem (from === selectedAgentId),
+              // tránh thinking/tool của agent khác hiện lẫn vào view. Ẩn event tool-only.
+              return m.from === selectedAgentId && !!(m.content || m.thinking || (m.toolCalls && m.toolCalls.length > 0) || (m.parts && m.parts.length > 0));
             }
             if (m.from === selectedAgentId && m.to && m.to !== 'user' && m.to !== 'broadcast') return false;
             const isFromWorker = m.from !== 'user' && m.from !== selectedAgentId && m.agentRole !== 'orchestrator' && m.from !== 'system' && m.from !== 'error';
@@ -736,8 +848,9 @@ const sendMessage = async (text: string) => {
             );
           }
           if (m.msgType === 'opencode') {
-            // Live stream từ stdio: hiển thị khi có text/thinking, ẩn event tool-only (content rỗng)
-            return !!(m.content || m.thinking || (m.toolCalls && m.toolCalls.length > 0) || (m.parts && m.parts.length > 0));
+            // Live stream từ stdio: chỉ hiển thị snapshot của CHÍNH agent đang xem (from === selectedAgentId),
+            // tránh thinking/tool của agent khác hiện lẫn vào view. Ẩn event tool-only (content rỗng).
+            return m.from === selectedAgentId && !!(m.content || m.thinking || (m.toolCalls && m.toolCalls.length > 0) || (m.parts && m.parts.length > 0));
           }
           return (
             m.from === selectedAgentId ||
@@ -746,43 +859,23 @@ const sendMessage = async (text: string) => {
             (m.from === 'error' && m.to === selectedAgentId)
           );
         });
-        // Fix dup (bug a): ở TAB AGENT, snapshot opencode (content rỗng, thinking/toolCalls/parts đầy đủ)
-        // và canonical reply ('talk', from=agent, content text đầy đủ) CÙNG lọt filter → render 2 bubble
-        // cùng sender → content hiện 2 lần. GỘP (a3): 1 bubble duy nhất — text từ canonical reply +
-        // tool/thinking từ snapshot opencode gần nhất cùng agent. KHÔNG xóa dữ liệu (giữ mục tiêu gốc:
-        // thinking/toolCalls vẫn hiển thị sau restart). Các tin khác (user, error, talk khác) giữ nguyên vị trí.
-        const arr: ChatMsg[] = [...base];
-        for (let i = 0; i < arr.length; i++) {
-          const cur = arr[i];
-          const isOacSnap = cur.msgType === 'opencode' && !!cur.from && cur.from === selectedAgentId;
-          if (!isOacSnap) continue;
-          // Tìm canonical reply CÙNG agent phía sau (cùng turn): bỏ qua tin không liên quan nhưng
-          // DỪNG khi gặp lượt user mới hoặc lệnh giao task mới tới agent (turn mới bắt đầu).
-          for (let j = i + 1; j < arr.length; j++) {
-            const nxt = arr[j];
-            if (nxt.from === 'user') break; // lượt mới của user → snapshot đứng riêng
-            const isNewTask = nxt.to === selectedAgentId && nxt.from !== selectedAgentId;
-            if (isNewTask) break; // task mới tới agent → snapshot của turn cũ đứng riêng
-            if (nxt.from === cur.from && nxt.msgType !== 'opencode' && !!nxt.content && nxt.content.trim().length > 0) {
-              const dt = Math.abs((nxt.timestamp || 0) - (cur.timestamp || 0));
-              if (dt > 120000) break; // quá xa thời gian → không cùng turn
-              // Gộp tại vị trí snapshot (text từ reply + tool/thinking/parts từ snapshot), xóa reply.
-              arr[i] = {
-                ...nxt,
-                thinking: nxt.thinking || cur.thinking,
-                toolCalls: (nxt.toolCalls && nxt.toolCalls.length) ? nxt.toolCalls : cur.toolCalls,
-                parts: (nxt.parts && nxt.parts.length) ? nxt.parts : cur.parts
-              };
-              arr.splice(j, 1);
-              break;
-            }
-          }
-        }
-        return arr;
+        // Fix interleave 6.44 (rework 6.33): GIỮ text+tool trong parts snapshot opencode để render xen kẽ.
+        // Dedup canonical reply trùng nội dung: xử lý bởi applyOacDedup ở outer level — không cần inline.
+        // Bỏ toàn bộ cơ chế gộp/splice client 6.33 (trước đây gộp snapshot + reply thành 1 bubble).
+        // Server giờ giữ text+tool trong parts; applyOacDedup lọc reply trùng nội dung.
+        return base;
       })()
     : allMessages.filter(m => {
         if (isSystemMsg(m)) return false;
         if (isInternalMsg(m)) return false;
+        // Fix 6.36: MAIN view (orchestrator chính) chỉ hiển thị msg thuộc TEAM của chính nó.
+        // Realtime broadcast KHÔNG lọc team (server gửi toàn bộ ws/sse clients) — snapshot/thinking/chunk
+        // của sub-orch team khác hiện lẫn trên MAIN. History /api/history đã lọc team đúng, chỉ thiếu
+        // REALTIME. Server giờ gắn teamId vào 3 event (chat:thinking/chat:chunk/chat:message opencode),
+        // client lọc ở đây: msg mang teamId khác team MAIN → ẩn.
+        const mainOrch = agents.find(a => a.id === 'orchestrator');
+        const mainTeamId = mainOrch?.teamId || 'default';
+        if (m.teamId && m.teamId !== mainTeamId) return false;
         // Tab Main: chỉ hiển thị snapshot 'opencode' của ORCHESTRATOR + agent mục tiêu người dùng chọn.
         // Ẩn hoàn toàn snapshots opencode của WORKER (msgType 'opencode', from=worker) — worker chỉ nên
         // thấy ở tab agent của chính nó, không hiện lên màn hình MAIN (orchestrator view). Không xóa dữ liệu.
@@ -806,7 +899,8 @@ const sendMessage = async (text: string) => {
           (m.msgType === 'error' && (m.to === 'user' || m.from === 'orchestrator')) ||
           (m.from === 'error' && (m.to === 'user' || m.to === 'orchestrator'))
         );
-      });
+      })
+  );
 
   const formatMessage = (msg: ChatMsg): { sender: string; content: string; isUser: boolean; timestamp?: number } => {
     const isUser = msg.from === 'user';
@@ -977,7 +1071,7 @@ const sendMessage = async (text: string) => {
       }
     : {
         width: sidebarWidth,
-        minWidth: 240,
+        minWidth: 180,
         maxWidth: 600,
         borderRight: '1px solid var(--af-border)',
         display: 'flex',
@@ -1233,7 +1327,7 @@ const sendMessage = async (text: string) => {
             const startX = e.clientX;
             const startW = sidebarWidth;
             const onMove = (ev: MouseEvent) => {
-              const nw = Math.max(240, Math.min(600, startW + ev.clientX - startX));
+              const nw = Math.max(220, Math.min(650, startW + ev.clientX - startX));
               setSidebarWidth(nw);
               try { localStorage.setItem('agentforge_sidebar_width', String(nw)); } catch {}
             };
@@ -1257,45 +1351,64 @@ const sendMessage = async (text: string) => {
         />
         )}
 
-        {/* Chat column: TabBar + ChatPanel */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-          <TabBar agents={agents} selectedAgentId={selectedAgentId} onSelect={selectAgent} isMobile={isMobile} />
-          <ChatPanel
-            messages={filteredMessages.map(m => ({
-              id: m.id,
-              agentId: m.from,
-              role: m.from === 'user' ? 'user' : 'assistant',
-              content: m.content,
-              timestamp: m.timestamp,
-              thinking: m.thinking
-            }))}
-            onSend={sendMessage}
-            onStop={stopAgent}
-            onClear={clearChat}
-            loading={loading}
-            title={selectedAgentId ? (() => {
-              const a = agents.find(x => x.id === selectedAgentId);
-              return a ? `${a.name} (${a.id})${a.sessionTitle ? ` — ${a.sessionTitle}` : ''}` : 'Agent';
-            })() : (() => {
-              const a = agents.find(x => x.id === 'orchestrator');
-              return a && a.sessionTitle ? `Orchestrator (orchestrator) — ${a.sessionTitle}` : 'Orchestrator (orchestrator)';
-            })()}
-            tokenUsage={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.tokenUsage : agents.find(x => x.id === 'orchestrator')?.tokenUsage}
-            contextLength={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.contextLength : agents.find(x => x.id === 'orchestrator')?.contextLength}
-            model={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.model : agents.find(x => x.id === 'orchestrator')?.model}
-            status={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.status : agents.find(x => x.id === 'orchestrator')?.status}
-            formatMessage={formatMessage}
-            allMessages={filteredMessages}
-            agents={agents}
-            isMobile={isMobile}
-            connStatus={connectionStatus}
-            offlineForText={offlineForText}
-            uptimeText={uptimeText}
-            showToolBlocks={true}
-            queuedMessages={queuedMessages}
-            onFlushQueue={flushQueue}
-          />
-        </div>
+        {/* Chat column: ChatPanel (gỡ bỏ top TabBar để tối đa hóa không gian đọc & soạn thảo) */}
+        {(() => {
+          const activeTargetId = selectedAgentId || 'orchestrator';
+          const currentQueue = agentQueues[activeTargetId] || [];
+          return (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+              <ChatPanel
+                messages={filteredMessages.map(m => ({
+                  id: m.id,
+                  agentId: m.from,
+                  role: m.from === 'user' ? 'user' : 'assistant',
+                  content: m.content,
+                  timestamp: m.timestamp,
+                  thinking: m.thinking
+                }))}
+                onSend={sendMessage}
+                onStop={stopAgent}
+                onClear={clearChat}
+                loading={loading}
+                title={selectedAgentId ? (() => {
+                  const a = agents.find(x => x.id === selectedAgentId);
+                  return a ? `${a.name} (${a.id})${a.sessionTitle ? ` — ${a.sessionTitle}` : ''}` : 'Agent';
+                })() : (() => {
+                  const a = agents.find(x => x.id === 'orchestrator');
+                  return a && a.sessionTitle ? `Orchestrator (orchestrator) — ${a.sessionTitle}` : 'Orchestrator (orchestrator)';
+                })()}
+                tokenUsage={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.tokenUsage : agents.find(x => x.id === 'orchestrator')?.tokenUsage}
+                contextLength={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.contextLength : agents.find(x => x.id === 'orchestrator')?.contextLength}
+                model={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.model : agents.find(x => x.id === 'orchestrator')?.model}
+                status={selectedAgentId ? agents.find(x => x.id === selectedAgentId)?.status : agents.find(x => x.id === 'orchestrator')?.status}
+                formatMessage={formatMessage}
+                allMessages={filteredMessages}
+                agents={agents}
+                isMobile={isMobile}
+                connStatus={connectionStatus}
+                offlineForText={offlineForText}
+                uptimeText={uptimeText}
+                showToolBlocks={true}
+                queuedMessages={currentQueue}
+                onFlushQueue={() => flushQueueForAgent(activeTargetId)}
+                onClearQueue={() => clearQueueForAgent(activeTargetId)}
+                onRemoveQueueItem={(idx) => {
+                  setAgentQueues(prev => {
+                    const q = prev[activeTargetId] || [];
+                    if (idx < 0 || idx >= q.length) return prev;
+                    const nextQ = q.filter((_, i) => i !== idx);
+                    if (nextQ.length === 0) {
+                      const updated = { ...prev };
+                      delete updated[activeTargetId];
+                      return updated;
+                    }
+                    return { ...prev, [activeTargetId]: nextQ };
+                  });
+                }}
+              />
+            </div>
+          );
+        })()}
       </div>
 
       {/* Backdrop + Hamburger cho mobile (nằm ngoài sidebar vì sidebar có transform) */}
@@ -1332,129 +1445,252 @@ const sendMessage = async (text: string) => {
         </button>
       )}
 
-      {/* ===== BOTTOM PANEL (collapsible) ===== */}
-      {!isMobile && (
-        <div className="af-bottompanel" style={{ height: panelOpen ? panelHeight : 28 }}>
-          <div className="af-bottompanel-header">
-            <button
-              onClick={() => setPanelOpen(!panelOpen)}
-              style={{ border: 'none', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
-            >
-              {panelOpen ? '▾' : '▸'} Hoạt động & Hàng đợi
-            </button>
-            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({activityLog.length})</span>
-            <span className="af-statusbar-spacer" />
-            {queuedMessages.length > 0 && (
-              <button
-                onClick={flushQueue}
-                style={{ border: '1px solid var(--af-border)', background: 'var(--wb-success-bg)', color: 'var(--wb-success-strong)', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}
-              >
-                Gửi hết ({queuedMessages.length})
-              </button>
-            )}
-          </div>
-          {panelOpen && (
-            <div className="af-bottompanel-body" style={{ flex: 1, minHeight: 0, padding: '6px 10px' }}>
-              {/* Connection + uptime */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, padding: '4px 0', color: 'var(--text-secondary)' }}>
-                <span
-                  className={connected ? 'pulsing-green' : 'pulsing-red'}
-                  style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: connected ? '#22c55e' : '#ef4444', display: 'inline-block' }}
-                />
-                {connectionStatus === 'connected'
-                  ? `Live WS${uptimeText ? ` (${uptimeText})` : ''}`
-                  : `Offline${offlineForText ? ` (${offlineForText} trước)` : ''}`}
-                {serverCwd && <span style={{ color: 'var(--text-muted)', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📁 {serverCwd}</span>}
-              </div>
-              {/* Hàng đợi tin (queue chuyển từ ChatPanel xuống đây) */}
-              {queuedMessages.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 0', borderBottom: '1px solid var(--wb-panel-border)' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--wb-info)' }}>
-                    ⏳ Hàng đợi ({queuedMessages.length})
-                  </div>
-                  {queuedMessages.slice(0, 20).map((q, i) => (
-                    <div key={`${q.id}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
-                      <span style={{ flexShrink: 0 }}>→</span>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.content.slice(0, 120)}</span>
-                      {q.from && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>({q.from})</span>}
-                    </div>
-                  ))}
-                  {queuedMessages.length > 20 && (
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>… +{queuedMessages.length - 20} tin chờ</div>
-                  )}
-                </div>
-              )}
-              {/* Activity log */}
-              {activityLog.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '4px 0' }}>Chưa có hoạt động.</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0' }}>
-                  {activityLog.slice(-80).reverse().map(a => (
-                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
-                      <span
-                        className={a.status === 'working' ? 'pulsing-green' : undefined}
-                        style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: a.status === 'working' ? '#22c55e' : a.status === 'blocked' ? '#f87171' : '#64748b', display: 'inline-block', flexShrink: 0 }}
-                      />
-                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.name}</span>
-                      <span style={{ color: 'var(--text-muted)' }}>→ {a.status}</span>
-                      <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                        {new Date(a.ts).toLocaleTimeString()}
+      {/* ===== CORNER FLOATING WIDGET (X working · Live) & POPOVER ===== */}
+      {(() => {
+        const workingAgents = agents.filter(a => a.status === 'working');
+        const workingCount = workingAgents.length;
+        const totalQueuedCount = Object.values(agentQueues).reduce((sum, q) => sum + (q ? q.length : 0), 0);
+
+        return (
+          <>
+            {/* Popover Window khi bấm vào Widget */}
+            {showWorkingPopover && (() => {
+              const activeCount = agents.length;
+              return (
+                <div
+                  style={{
+                    position: 'fixed',
+                    bottom: 48,
+                    right: 16,
+                    width: isMobile ? 'calc(100vw - 32px)' : 380,
+                    maxHeight: 520,
+                    background: 'var(--bg-panel, #0e131d)',
+                    border: '1px solid var(--af-border-strong)',
+                    borderRadius: 12,
+                    boxShadow: '0 12px 40px rgba(0, 0, 0, 0.55)',
+                    zIndex: 75,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                    animation: 'fadeIn 0.15s ease-out'
+                  }}
+                >
+                  {/* Popover Header */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 14px',
+                    background: 'var(--bg-input, #151d2c)',
+                    borderBottom: '1px solid var(--af-border)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 14 }}>👥</span>
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+                        Thành viên & Nhiệm vụ ({activeCount})
                       </span>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {/* Resizer dọc (kéo cao panel) */}
-          {panelOpen && (
-            <div
-              onMouseDown={(e) => {
-                const startY = e.clientY;
-                const startH = panelHeight;
-                const onMove = (ev: MouseEvent) => {
-                  const nh = Math.max(120, Math.min(480, startH + (startY - ev.clientY)));
-                  setPanelHeight(nh);
-                  try { localStorage.setItem('agentforge_panel_height', String(nh)); } catch {}
-                };
-                const onUp = () => {
-                  document.removeEventListener('mousemove', onMove);
-                  document.removeEventListener('mouseup', onUp);
-                };
-                document.addEventListener('mousemove', onMove);
-                document.addEventListener('mouseup', onUp);
-              }}
-              style={{ height: 4, cursor: 'row-resize', background: 'var(--wb-panel-border)', flexShrink: 0 }}
-            />
-          )}
-        </div>
-      )}
+                    <button
+                      onClick={() => setShowWorkingPopover(false)}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        fontSize: 14,
+                        fontWeight: 700,
+                        padding: '2px 6px',
+                        borderRadius: 4
+                      }}
+                      title="Đóng cửa sổ"
+                    >
+                      ✕
+                    </button>
+                  </div>
 
-      {/* ===== STATUS BAR (đáy) ===== */}
-      <div className="af-statusbar">
-        <span className="af-statusbar-item af-clickable"
-          onClick={() => { if (serverCwd) navigator.clipboard.writeText(serverCwd).catch(() => {}); }}
-          title={serverCwd || 'Thư mục làm việc'}
-        >
-          📁 {serverCwd || 'no-cwd'}
-        </span>
-        {serverVersion && (
-          <span className="af-statusbar-item" title={`AgentForge v${serverVersion}`}>v{serverVersion}</span>
-        )}
-        <span className="af-statusbar-spacer" />
-        <span className="af-statusbar-item">
-          👥 {agents.filter(a => a.status === 'working').length} working
-        </span>
-        <span className="af-statusbar-item">
-          <span
-            className={connected ? 'pulsing-green' : 'pulsing-red'}
-            style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: connected ? '#22c55e' : '#ef4444', display: 'inline-block' }}
-          />
-          {connectionStatus === 'connected'
-            ? 'Live'
-            : `Offline${offlineForText ? ` (${offlineForText})` : ''}`}
-        </span>
-      </div>
+                  {/* Popover Content — All Agents Grouped */}
+                  <div style={{
+                    padding: '10px 12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    overflowY: 'auto',
+                    maxHeight: 400
+                  }}>
+                    {agents.length === 0 ? (
+                      <div style={{
+                        textAlign: 'center',
+                        padding: '20px 10px',
+                        color: 'var(--text-muted)',
+                        fontSize: 12
+                      }}>
+                        <div style={{ fontSize: 24, marginBottom: 6 }}>👥</div>
+                        Chưa có agent nào trong team.
+                      </div>
+                    ) : (
+                      // Sắp xếp: working lên đầu, sau đó đến blocked/error, rồi idle, stopped
+                      [...agents].sort((a, b) => {
+                        const rank = (s: string) => s === 'working' ? 0 : (s === 'error' || s === 'blocked') ? 1 : s === 'idle' ? 2 : 3;
+                        return rank(a.status) - rank(b.status);
+                      }).map(ag => {
+                        const isWorking = ag.status === 'working';
+                        const isError = ag.status === 'error' || ag.status === 'blocked';
+                        const isIdle = ag.status === 'idle';
+                        const statusColor = isWorking ? '#4ade80' : isError ? '#f87171' : isIdle ? '#94a3b8' : '#64748b';
+                        const statusBg = isWorking ? 'rgba(34, 197, 94, 0.15)' : isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(148, 163, 184, 0.12)';
+                        const statusBorder = isWorking ? 'rgba(34, 197, 94, 0.35)' : isError ? 'rgba(239, 68, 68, 0.35)' : 'rgba(148, 163, 184, 0.25)';
+                        const elapsed = isWorking && ag.workingSince ? formatElapsed(Date.now() - ag.workingSince) : '';
+                        const parsedTasks = parseAgentTaskList(ag);
+
+                        return (
+                          <div
+                            key={ag.id}
+                            onClick={() => {
+                              selectAgent(ag.id);
+                              setShowWorkingPopover(false);
+                            }}
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 6,
+                              padding: '10px 12px',
+                              background: isWorking
+                                ? 'rgba(59, 130, 246, 0.08)'
+                                : isError
+                                ? 'rgba(239, 68, 68, 0.08)'
+                                : 'rgba(255, 255, 255, 0.02)',
+                              border: `1px solid ${isWorking ? 'rgba(59, 130, 246, 0.4)' : isError ? 'rgba(239, 68, 68, 0.4)' : 'var(--af-border)'}`,
+                              borderRadius: 8,
+                              cursor: 'pointer',
+                              transition: 'all 0.15s ease'
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.borderColor = 'var(--accent, #3b82f6)';
+                              e.currentTarget.style.background = isWorking ? 'rgba(59, 130, 246, 0.14)' : 'rgba(59, 130, 246, 0.06)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.borderColor = isWorking ? 'rgba(59, 130, 246, 0.4)' : isError ? 'rgba(239, 68, 68, 0.4)' : 'var(--af-border)';
+                              e.currentTarget.style.background = isWorking ? 'rgba(59, 130, 246, 0.08)' : isError ? 'rgba(239, 68, 68, 0.08)' : 'rgba(255, 255, 255, 0.02)';
+                            }}
+                            title="Bấm để chuyển nhanh sang tab agent này"
+                          >
+                            {/* Header: Agent Name + Role + Status Badge */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                {ag.type === 'orchestrator' || ag.id === 'orchestrator' ? '👑' : '🤖'} {ag.name} <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)' }}>({ag.role})</span>
+                              </span>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                fontSize: 10,
+                                fontWeight: 700,
+                                color: statusColor,
+                                background: statusBg,
+                                padding: '1px 6px',
+                                borderRadius: 4,
+                                border: `1px solid ${statusBorder}`,
+                                textTransform: 'uppercase'
+                              }}>
+                                {isWorking && <span className="pulsing-green" style={{ width: 5, height: 5, borderRadius: '50%', background: '#22c55e' }} />}
+                                {isError && <span>⚠️</span>}
+                                {ag.status}{elapsed ? ` (${elapsed})` : ''}
+                              </span>
+                            </div>
+
+                            {/* Task Content with #1, #2, #3 numbering */}
+                            {Array.isArray(parsedTasks) && parsedTasks.length > 0 ? (
+                              <div style={{
+                                maxHeight: 110,
+                                overflowY: 'auto',
+                                paddingRight: 2
+                              }}>
+                                {renderAgentTaskList(parsedTasks)}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic', paddingLeft: 4 }}>
+                                (Chưa gán nhiệm vụ cụ thể)
+                              </div>
+                            )}
+
+                            <div style={{ fontSize: 10, color: 'var(--accent, #3b82f6)', textAlign: 'right', fontWeight: 600 }}>
+                              👉 Bấm để chuyển tab
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* Popover Footer Info */}
+                  <div style={{
+                    padding: '8px 12px',
+                    background: 'var(--bg-input, #151d2c)',
+                    borderTop: '1px solid var(--af-border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: 11,
+                    color: 'var(--text-muted)'
+                  }}>
+                    <span>📁 {serverCwd ? serverCwd.split('\\').pop() : 'cwd'}</span>
+                    {serverVersion && <span>v{serverVersion}</span>}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Corner Floating Widget */}
+            <div
+              onClick={() => setShowWorkingPopover(prev => !prev)}
+              style={{
+                position: 'fixed',
+                bottom: 8,
+                right: 14,
+                zIndex: 70,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 11px',
+                background: showWorkingPopover ? 'var(--bg-input, #151d2c)' : 'rgba(14, 19, 29, 0.88)',
+                backdropFilter: 'blur(12px)',
+                border: `1px solid ${workingCount > 0 ? 'rgba(34, 197, 94, 0.45)' : 'var(--af-border-strong)'}`,
+                borderRadius: 9999,
+                boxShadow: workingCount > 0 ? '0 4px 20px rgba(34, 197, 94, 0.25)' : '0 4px 20px rgba(0, 0, 0, 0.4)',
+                cursor: 'pointer',
+                userSelect: 'none',
+                transition: 'all 0.2s ease'
+              }}
+              title="Bấm để mở danh sách task & agent đang chạy"
+            >
+              <span
+                className={connected ? (workingCount > 0 ? 'pulsing-green' : '') : 'pulsing-red'}
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  backgroundColor: connected ? (workingCount > 0 ? '#22c55e' : '#4ade80') : '#ef4444',
+                  display: 'inline-block'
+                }}
+              />
+              <span style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: connected ? (workingCount > 0 ? '#4ade80' : 'var(--text-primary)') : '#f87171',
+                maxWidth: isMobile ? 220 : 340,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}>
+                {`${workingCount} working · ${connected ? "Live" : "Offline"}`}
+              </span>
+              <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>
+                {showWorkingPopover ? '▾' : '▴'}
+              </span>
+            </div>
+          </>
+        );
+      })()}
 
       {/* Spawn Dialog */}
       {showSpawn && (

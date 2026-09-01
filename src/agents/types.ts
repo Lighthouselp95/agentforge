@@ -23,6 +23,7 @@ export interface AgentConfig {
   name: string;
   type: AgentType;
   role: AgentRole;
+  teamId?: string; // Nhóm/orchestrator team mà agent này thuộc về — dùng tách lịch sử chat giữa các team
   model?: string;
   projectDir?: string;
   systemPrompt?: string;

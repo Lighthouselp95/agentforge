@@ -27,7 +27,7 @@ export function TabBar({ agents, selectedAgentId, onSelect, isMobile }: Props) {
   };
 
   return (
-    <div className="af-tabbar" style={isMobile ? { paddingLeft: 0 } : undefined}>
+    <div className="af-tabbar" style={isMobile ? { paddingLeft: 54 } : undefined}>
       {agents.map((a) => {
         const active = a.id === selectedAgentId;
         const isWorking = a.status === 'working';

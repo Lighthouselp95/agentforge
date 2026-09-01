@@ -1,6 +1,6 @@
 {
   "name": "agentforge",
-  "version": "0.2.0",
+  "version": "6.24.0",
   "main": "dist-electron/main.js",
   "bin": "dist/server.js",
   "description": "ACP Multi-Agent Orchestrator with GUI",
@@ -11,7 +11,7 @@
     "build": "tsc && vite build --config web/vite.config.ts && tsc -p tsconfig.electron.json",
     "build:electron": "npm run build && npm run build:exe && electron-builder --win portable",
     "build:exe": "npm run build && node scripts/build-sea-bundle.mjs && node scripts/gen-sea-assets.mjs && node --experimental-sea-config sea-config.json && node -e \"const fs=require('fs');fs.mkdirSync('release',{recursive:true});fs.copyFileSync(process.execPath,'release/agentforge-web.exe')\" && npx postject release/agentforge-web.exe NODE_SEA_BLOB dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
-    "electron:dev": "concurrently -n server,web,electron -c blue,green,magenta \"npm run dev:watch\" \"npm run dev:web\" \"wait-on http://localhost:3001 && npx electron dist-electron/main.js\"",
+    "electron:dev": "concurrently -n server,web,electron -c blue,green,magenta \"npm run dev:watch\" \"npm run dev:web\" \"wait-on http://localhost:4001 && npx electron dist-electron/main.js\"",
     "start": "tsx src/server.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "dev:all": "concurrently -n server,web -c blue,green \"npm run dev:watch\" \"npm run dev:web\"",

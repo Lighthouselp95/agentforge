@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
-let SERVER_PORT = parseInt(process.env.PORT || '3001', 10);
+let SERVER_PORT = parseInt(process.env.PORT || '4001', 10);
 
 // ========== PATH HELPERS ==========
 function isDev(): boolean {

@@ -84,6 +84,17 @@ export interface ChatQueueItem {
   lastError?: string;
 }
 
+export interface SystemLogEntry {
+  id: string;
+  timestamp: number;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  source: string;
+  agentId?: string;
+  agentName?: string;
+  message: string;
+  data?: any;
+}
+
 interface StorageSchema {
   agents: any[];
   history: any[];
@@ -91,14 +102,17 @@ interface StorageSchema {
   outbox?: OutboxReport[];
   chatQueue?: ChatQueueItem[];
   unprocessedUserMessages?: Record<string, string[]>;
+  logs?: SystemLogEntry[];
 }
 
+export const MAX_LOGS_ENTRIES = 5000;
 let inMemoryAgents = new Map<string, any>();
 let inMemoryHistory: any[] = [];
 let inMemorySettings: Record<string, any> = {};
 let inMemoryOutbox: OutboxReport[] = [];
 let inMemoryChatQueue: ChatQueueItem[] = [];
 let inMemoryUnprocessedUserMessages: Record<string, string[]> = {};
+let inMemoryLogs: SystemLogEntry[] = [];
 let isDirty = false;
 let isWriting = false;
 
@@ -187,6 +201,7 @@ function loadStateFromDisk() {
     inMemoryOutbox = loadedState.outbox || [];
     inMemoryChatQueue = (loadedState as any).chatQueue || [];
     inMemoryUnprocessedUserMessages = (loadedState as any).unprocessedUserMessages || {};
+    inMemoryLogs = (loadedState as any).logs || [];
 
     // If we recovered from backup or if backup doesn't exist yet, ensure backup is up to date
     if (loadedFromBackup) {
@@ -253,7 +268,8 @@ function writeStateSync() {
       settings: inMemorySettings,
       outbox: inMemoryOutbox.slice(-500),
       chatQueue: inMemoryChatQueue.slice(-200),
-      unprocessedUserMessages: inMemoryUnprocessedUserMessages
+      unprocessedUserMessages: inMemoryUnprocessedUserMessages,
+      logs: inMemoryLogs.slice(-MAX_LOGS_ENTRIES)
     };
     const content = JSON.stringify(data, null, 2);
 
@@ -329,6 +345,19 @@ process.on('SIGTERM', () => {
 // Initial load
 loadStateFromDisk();
 
+// Xác định teamId của một tin nhắn dựa trên agent liên quan (from/to).
+// Ưu tiên: msg.teamId sẵn → agent theo from → agent theo to → 'default'.
+function resolveTeamIdForMsg(msg: any): string {
+  if (msg && msg.teamId && typeof msg.teamId === 'string') return msg.teamId;
+  const candidates = [msg && msg.from, msg && msg.to];
+  for (const cid of candidates) {
+    if (!cid || typeof cid !== 'string') continue;
+    const ag = inMemoryAgents.get(cid);
+    if (ag && ag.teamId && typeof ag.teamId === 'string') return ag.teamId;
+  }
+  return 'default';
+}
+
 export const storage = {
   saveAgent(agent: any) {
     inMemoryAgents.set(agent.id, { ...agent });
@@ -365,7 +394,14 @@ export const storage = {
   },
 
   saveMessage(msg: any) {
-    inMemoryHistory.push({ ...msg });
+    const m = { ...msg };
+    // Gắn teamId tự động từ agent (from/to) nếu msg chưa có — đảm bảo mọi tin nhắn
+    // đều thuộc một team để tách lịch sử giữa các team (+ New Team).
+    if (!m.teamId) {
+      const tid = resolveTeamIdForMsg(msg);
+      if (tid) m.teamId = tid;
+    }
+    inMemoryHistory.push(m);
     if (Number.isFinite(MAX_PERSISTED_MESSAGES) && inMemoryHistory.length > MAX_PERSISTED_MESSAGES) {
       inMemoryHistory.shift();
     }
@@ -392,11 +428,19 @@ export const storage = {
     schedulePersist();
   },
 
-  getHistory(limit?: number) {
-    if (typeof limit === 'number' && limit > 0) {
-      return inMemoryHistory.slice(-limit);
+  getHistory(limit?: number, teamId?: string) {
+    let list = inMemoryHistory;
+    if (teamId) {
+      list = list.filter(m => {
+        const t = m.teamId || 'default';
+        if (teamId === 'default') return t === 'default';
+        return t === teamId;
+      });
     }
-    return inMemoryHistory;
+    if (typeof limit === 'number' && limit > 0) {
+      return list.slice(-limit);
+    }
+    return list;
   },
 
   // ============ REPORT OUTBOX (durable queue for agent reports) ============
@@ -508,12 +552,20 @@ export const storage = {
       .slice(-limit);
   },
 
-  // Paged history query: hỗ trợ limit + beforeId (trả về các tin nhắn CŨ HƠN id chỉ định) + lọc theo agent
-  getHistoryPage(opts: { limit?: number; beforeId?: string | number; agentId?: string } = {}) {
+  // Paged history query: hỗ trợ limit + beforeId (trả về các tin nhắn CŨ HƠN id chỉ định) + lọc theo agent/team
+  getHistoryPage(opts: { limit?: number; beforeId?: string | number; agentId?: string; teamId?: string } = {}) {
     let list = inMemoryHistory;
     const aid = opts.agentId;
     if (aid) {
       list = list.filter(m => m.from_id === aid || m.to_id === aid || m.from === aid || m.to === aid);
+    }
+    if (opts.teamId) {
+      // Lọc theo team: msg có teamId === teamId HOẶC msg cũ không teamId thuộc team mặc định 'default'.
+      // Nếu teamId là 'default' thì nhận cả msg legacy (không teamId) để KHÔNG mất history cũ.
+      const teamFilter = opts.teamId === 'default'
+        ? (m: any) => (m.teamId || 'default') === 'default'
+        : (m: any) => (m.teamId || 'default') === opts.teamId;
+      list = list.filter(teamFilter);
     }
     if (opts.beforeId !== undefined && opts.beforeId !== null && String(opts.beforeId).length > 0) {
       const beforeStr = String(opts.beforeId);
@@ -604,6 +656,58 @@ export const storage = {
     }
     schedulePersist();
     return this.getModelSettings();
+  },
+
+  saveLog(entry: Omit<SystemLogEntry, 'id' | 'timestamp'> & { id?: string; timestamp?: number }): SystemLogEntry {
+    const fullEntry: SystemLogEntry = {
+      id: entry.id || `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: entry.timestamp || Date.now(),
+      level: entry.level || 'info',
+      source: entry.source || 'system',
+      agentId: entry.agentId,
+      agentName: entry.agentName,
+      message: entry.message || '',
+      data: entry.data
+    };
+    inMemoryLogs.push(fullEntry);
+    if (inMemoryLogs.length > MAX_LOGS_ENTRIES) {
+      inMemoryLogs.splice(0, inMemoryLogs.length - MAX_LOGS_ENTRIES);
+    }
+    schedulePersist();
+    return fullEntry;
+  },
+
+  getLogs(opts: {
+    level?: string;
+    source?: string;
+    agentId?: string;
+    limit?: number;
+    beforeId?: string;
+  } = {}): SystemLogEntry[] {
+    let list = inMemoryLogs;
+    if (opts.level) {
+      const lvl = opts.level.toLowerCase();
+      list = list.filter(l => (l.level || '').toLowerCase() === lvl);
+    }
+    if (opts.source) {
+      const src = opts.source.toLowerCase();
+      list = list.filter(l => (l.source || '').toLowerCase() === src);
+    }
+    if (opts.agentId) {
+      list = list.filter(l => l.agentId === opts.agentId);
+    }
+    if (opts.beforeId) {
+      const idx = list.findIndex(l => l.id === opts.beforeId);
+      if (idx > 0) list = list.slice(0, idx);
+      else if (idx === 0) return [];
+    }
+    const lim = Math.max(1, Math.min(opts.limit ?? 200, MAX_LOGS_ENTRIES));
+    return list.slice(-lim);
+  },
+
+  clearLogs() {
+    inMemoryLogs = [];
+    schedulePersist();
   },
 
   flush() {

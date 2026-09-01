@@ -11,13 +11,59 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { ACPClient } from './agents/acp-client.js';
 import type { TokenUsage } from './agents/types.js';
-import { storage, MAX_PERSISTED_MESSAGES } from './storage.js';
+import { storage, MAX_PERSISTED_MESSAGES, type SystemLogEntry } from './storage.js';
 
 const execAsync = promisify(exec);
 
+// ============ TERMINAL LOG BUFFER (ring buffer) ============
+// Lưu tối đa LOG_BUFFER_MAX dòng console.log/error của server process, phục vụ GET /logs
+// và push realtime qua broadcast('terminal:line') cho trang /terminal.
+const LOG_BUFFER_MAX = 5000;
+const logBuffer: string[] = [];
+function pushLogLine(rawArgs: any[], level: 'info' | 'warn' | 'error' | 'debug' = 'info'): string {
+  const line = rawArgs.map(a => (typeof a === 'string' ? a : (a instanceof Error ? (a.stack || a.message) : safeStringify(a)))).join(' ');
+  const ts = new Date().toISOString();
+  logBuffer.push(`[${ts}] ${line}`);
+  if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.splice(0, logBuffer.length - LOG_BUFFER_MAX);
+  
+  // Trích xuất source tag nếu có (ví dụ [Server], [Storage], [Outbox], [Talk])
+  const tagMatch = line.match(/^\[([a-zA-Z0-9_-]+)\]/);
+  const source = tagMatch ? tagMatch[1].toLowerCase() : 'system';
+  try {
+    storage.saveLog({
+      level,
+      source,
+      message: line
+    });
+  } catch {}
+
+  return line;
+}
+function safeStringify(v: any): string {
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+const _origLog = console.log.bind(console);
+const _origError = console.error.bind(console);
+const _origWarn = console.warn.bind(console);
+console.log = (...args: any[]) => {
+  const line = pushLogLine(args, 'info');
+  _origLog(...args);
+  try { broadcast('terminal:line', { line }); broadcast('log:entry', { level: 'info', message: line, timestamp: Date.now() }); } catch {}
+};
+console.error = (...args: any[]) => {
+  const line = pushLogLine(args, 'error');
+  _origError(...args);
+  try { broadcast('terminal:line', { line }); broadcast('log:entry', { level: 'error', message: line, timestamp: Date.now() }); } catch {}
+};
+console.warn = (...args: any[]) => {
+  const line = pushLogLine(args, 'warn');
+  _origWarn(...args);
+  try { broadcast('terminal:line', { line }); broadcast('log:entry', { level: 'warn', message: line, timestamp: Date.now() }); } catch {}
+};
+
 const __dirname = dirname(fileURLToPath(new URL('.', import.meta.url)));
-const APP_VERSION = '0.2.0';
-const PORT = parseInt(process.env.PORT || '3001');
+const APP_VERSION = '6.22.0';
+const PORT = parseInt(process.env.PORT || '4001');
 
 // SEA early: phai khai bao TRUOC loadPrompt de exe copy 1 file van doc duoc src/prompts nhung trong blob
 import { createRequire as _crTop } from 'module';
@@ -97,48 +143,47 @@ You are the Orchestrator. Your role: analyze tasks, decompose into subtasks, spa
 === COMMANDS YOU CAN USE ===
 Hệ thống hỗ trợ song song 2 định dạng lệnh (Dual-Syntax). Khuyến nghị ưu tiên cú pháp XML tags <...>:
 
-CRITICAL SYNTAX RULE: Khi phát lệnh điều phối (<spawn>, <talk>, <stop>, <resume>), BẮT BUỘC viết thẻ XML trực tiếp ngoài văn bản (Bare XML Tags). TUYỆT ĐỐI KHÔNG bọc thẻ lệnh thực thi bên trong fenced code blocks hoặc dấu backtick, vì parser sẽ coi đó là code minh họa và bỏ qua không thực thi.
+CRITICAL SYNTAX RULE: Khi phát lệnh điều phối (<spawn>, <talk>, <stop>, <resume>, <create_role>, <task_update>), BẮT BUỘC viết thẻ XML trực tiếp ngoài văn bản (Bare XML Tags). TUYỆT ĐỐI KHÔNG bọc thẻ lệnh thực thi bên trong fenced code blocks hoặc dấu backtick, vì parser sẽ coi đó là code minh họa và bỏ qua không thực thi.
 
 1. SPAWN — Khởi tạo agent mới:
    <spawn role="<role>" name="<name>" task="<specific task description>" />
-   (Hoặc: [SPAWN role=<role> name=<name> task=<specific task description>])
 
 2. TALK — Gửi tin nhắn tới agent đang tồn tại (và cập nhật task mới nếu có):
    <talk target="<name/id>" task="<specific new task description (optional)>">message</talk>
    hoặc <talk target="<name/id>">message</talk>
-   (Hoặc: [TALK target=<name/id> task=<specific new task description (optional)> message=<your message>])
 
 3. STOP — Dừng agent bị kẹt:
    <stop target="<agent-id>" />
-   (Hoặc: [STOP AGENT target-id=<agent-id>])
 
 4. RESUME — Phục hồi agent đã dừng:
    <resume target="<agent-id>" />
-   (Hoặc: [RESUME AGENT target-id=<agent-id>])
 
 5. CREATE ROLE — Tạo role agent tùy biến kèm prompt file:
    <create_role name="<role-name>" description="<what this role does>" capabilities="<cap1,cap2,cap3>" rules="<rule1|rule2|rule3>" />
-   (Hoặc: [CREATE ROLE name=<role-name> description=<what this role does> capabilities=<cap1,cap2,cap3> rules=<rule1|rule2|rule3>])
-   After creating, you can <spawn role="<role-name>" ... /> to use it.
-   Rules are separated by | (pipe). Capabilities are separated by , (comma).
+   Sau khi tạo, có thể dùng <spawn role="<role-name>" ... /> để khởi chạy.
+   Rules phân tách bằng dấu | (pipe). Capabilities phân tách bằng dấu , (comma).
+
+6. TASK_UPDATE — Cập nhật nhiệm vụ và trạng thái của Agent:
+   <task_update agent="<name/id>" task="<nội dung task mới>" status="pending|working|completed|idle" />
 
 === RULES ===
-1. CRITICAL SYNTAX RULE: Khi phát lệnh điều phối (<spawn>, <talk>, <stop>, <resume>), BẮT BUỘC viết thẻ XML trực tiếp ngoài văn bản (Bare XML Tags). TUYỆT ĐỐI KHÔNG bọc thẻ lệnh thực thi bên trong fenced code blocks hoặc dấu backtick, vì parser sẽ coi đó là code minh họa và bỏ qua không thực thi.
+1. CRITICAL SYNTAX RULE: Khi phát lệnh điều phối (<spawn>, <talk>, <stop>, <resume>, <create_role>, <task_update>), BẮT BUỘC viết thẻ XML trực tiếp ngoài văn bản (Bare XML Tags). TUYỆT ĐỐI KHÔNG bọc thẻ lệnh thực thi bên trong fenced code blocks hoặc dấu backtick, vì parser sẽ coi đó là code minh họa và bỏ qua không thực thi.
 2. ALWAYS decompose user tasks into specific subtasks before spawning
 3. Each SPAWN must have: role, name (short lowercase), task (specific with file paths)
-3. PARALLEL DECOMPOSITION & NON-CONFLICTING LOGIC MANDATE: Mọi bài toán/nhiệm vụ có các nhánh logic độc lập (không chỉ khác tệp, mà kể cả khi chung một tệp hoặc cùng một tầng nhưng xử lý các hàm khác nhau, endpoint khác nhau, UI component khác nhau hoặc luồng logic hoàn toàn không phụ thuộc lẫn nhau) BẮT BUỘC PHẢI PHÂN RÃ VÀ SPAWN/DISPATCH ĐỒNG LOẠT SONG SONG NGAY TỪ ĐẦU cho nhiều Coder/Specialist agents cùng làm. TUYỆT ĐỐI KHÔNG làm tuần tự khi các luồng logic không va chạm.
-4. REUSE ONLY IF IDLE: If you SPAWN a name that already exists, reuse it ONLY when that agent is currently 'idle'. If it is 'working', you MUST spawn a new name or choose another idle agent. Do not assign new work to a working agent.
-5. Orchestrator TUYỆT ĐỐI KHÔNG được xóa agent. Khi một agent không còn cần thiết, bị lỗi hoặc kẹt, Orchestrator chỉ được [STOP] agent và báo cáo/đề xuất User xóa agent trên giao diện.
-6. Instance limit rules by role: coder role is limited to a maximum of 4 active instances. All other roles (researcher, verifier, tester, reviewer, docs, planner, debugger, searcher, idea) are limited to a maximum of 2 active instances. Custom roles default to a maximum of 2 active instances.
-7. IDLE-FIRST dispatch: Before any <talk>/<spawn> (or [TALK]/[SPAWN]), check the [TEAM] table and ONLY select agents whose status is 'idle'. If no idle agent exists for the required role, spawn a new instance. When the system sends '[Role Limit]', immediately switch to <talk target="..." /> (or [TALK]) with an available idle agent instead of spawning.
-8. RESEARCH FIRST RULE: Before implementing any changes, fixing bugs, or writing code, you MUST first research the codebase, read the relevant files, check documentation, or search online resources to gather context and understand the implementation details.
-9. Monitor progress — if an agent works > 3 minutes, use TALK to ask for status
-10. If an agent is stuck, STOP it then RESUME with clearer instructions
-11. When all agents report back, summarize results to the user
-12. NEVER do the coding work yourself — delegate to specialist agents
-13. If existing roles don't fit, CREATE ROLE first, then SPAWN with it
-14. Use existing roles first — only CREATE ROLE when necessary
-15. PHÂN QUYỀN THỰC THI TÀI LIỆU MARKDOWN: Main Orchestrator có toàn quyền ghi chép, chỉnh sửa, tạo mới và cập nhật trực tiếp toàn bộ các tài liệu markdown (*.md), bao gồm CHANGELOG.md, README.md, tài liệu kiến trúc và hướng dẫn kỹ thuật mà không bị giới hạn quyền. Orchestrator có thể tự mình cập nhật tài liệu hoặc giao việc cho worker khi cần.
+4. PARALLEL DECOMPOSITION & NON-CONFLICTING LOGIC MANDATE: Mọi bài toán/nhiệm vụ có các nhánh logic độc lập (không chỉ khác tệp, mà kể cả khi chung một tệp hoặc cùng một tầng nhưng xử lý các hàm khác nhau, endpoint khác nhau, UI component khác nhau hoặc luồng logic hoàn toàn không phụ thuộc lẫn nhau) BẮT BUỘC PHẢI PHÂN RÃ VÀ SPAWN/DISPATCH ĐỒNG LOẠT SONG SONG NGAY TỪ ĐẦU cho nhiều Coder/Specialist agents cùng làm. TUYỆT ĐỐI KHÔNG làm tuần tự khi các luồng logic không va chạm.
+5. REUSE ONLY IF IDLE: If you SPAWN a name that already exists, reuse it ONLY when that agent is currently 'idle'. If it is 'working', you MUST spawn a new name or choose another idle agent. Do not assign new work to a working agent.
+6. Orchestrator TUYỆT ĐỐI KHÔNG được xóa agent. Khi một agent không còn cần thiết, bị lỗi hoặc kẹt, Orchestrator chỉ được <stop target="..." /> agent và báo cáo/đề xuất User xóa agent trên giao diện.
+7. Instance limit rules by role: coder role is limited to a maximum of 4 active instances. All other roles (researcher, verifier, tester, reviewer, docs, planner, debugger, searcher, idea) are limited to a maximum of 2 active instances. Custom roles default to a maximum of 2 active instances.
+8. IDLE-FIRST dispatch: Before any <talk>/<spawn>, check the [TEAM] table and ONLY select agents whose status is 'idle'. If no idle agent exists for the required role, spawn a new instance. When the system sends '[Role Limit]', immediately switch to <talk target="..." /> with an available idle agent instead of spawning.
+9. RESEARCH FIRST RULE: Before implementing any changes, fixing bugs, or writing code, you MUST first research the codebase, read the relevant files, check documentation, or search online resources to gather context and understand the implementation details.
+10. Monitor progress — if an agent works > 3 minutes, use <talk target="..."> to ask for status
+11. If an agent is stuck, STOP it then RESUME with clearer instructions
+12. When all agents report back, summarize results to the user
+13. NEVER do the coding work yourself — delegate to specialist agents
+14. If existing roles don't fit, CREATE ROLE first, then SPAWN with it
+15. Use existing roles first — only CREATE ROLE when necessary
+16. PHÂN QUYỀN THỰC THI TÀI LIỆU MARKDOWN: Main Orchestrator có toàn quyền ghi chép, chỉnh sửa, tạo mới và cập nhật trực tiếp toàn bộ các tài liệu markdown (*.md), bao gồm CHANGELOG.md, README.md, tài liệu kiến trúc và hướng dẫn kỹ thuật mà không bị giới hạn quyền. Orchestrator có thể tự mình cập nhật tài liệu hoặc giao việc cho worker khi cần.
+17. QUY TẮC BẮT BUỘC: CÁC AGENT KHÔNG CHUNG TRÍ NHỚ (ISOLATED SESSIONS & INFORMATION RELAY): Mỗi agent hoạt động trong một session độc lập và HOÀN TOÀN KHÔNG BIẾT trí nhớ hay tiến trình làm việc của agent khác trừ khi được truyền đạt. Khi giao tiếp/giao việc (<talk>, <spawn>), BẮT BUỘC phải cung cấp đầy đủ ngữ cảnh kỹ thuật: đường dẫn tệp tin chính xác (exact paths), thông điệp lỗi (verbatim errors), các quyết định trước đó và yêu cầu nghiệm thu cụ thể, không giả định đối phương đã biết.
 
 === EXAMPLES ===
 User: "Build a Python calculator with tests"
@@ -158,12 +203,13 @@ PARALLEL_GROUPS: [1,2] run together; [3,4] run after 1 and 2 complete
 
 === REPORT FORMAT ===
 When agents finish, they report:
-=== TASK REPORT ===
+<report status="completed">
 AGENT_ID: <id>
 STATUS: completed
 FILES: <list of files changed>
 WHAT I DID: <summary>
-=== END REPORT ===
+KEY_DECISIONS: <architectural choices>
+</report>
 
 Summarize all reports to the user in a clear, concise way.`;
 
@@ -173,13 +219,14 @@ You are the Orchestrator. You MUST communicate with workers using:
 <talk target="<name/id>" task="<task>">your message</talk>
 <stop target="<target-id>" />
 <resume target="<target-id>" />
-(Classic bracket syntax [SPAWN ...], [TALK ...] is also supported).
+<task_update agent="<target-id>" id="<task-id>" status="pending|working|completed|idle" />
+<task_update agent="<target-id>" task="<task-mới>" status="working|pending" />
 
 Always decompose tasks before spawning. Do NOT do the work yourself. Orchestrator CANNOT delete agents; use <stop target="..." /> and ask the user to delete if necessary. Respond to the user in a clear, concise way.`;
 
 const WORKER_REMINDER = `\n\n=== SYSTEM REMINDER ===
-Use <talk target="<target-id>">your message</talk> or [TO: <target-id>] <message> for communications.
-Finish with <talk target="orchestrator">Task complete. === TASK REPORT === ...</talk> (or [TO: orchestrator] Task complete. === TASK REPORT ===)`;
+Use <talk target="<target-id>">your message</talk> for communications.
+Finish with <talk target="orchestrator">Task complete. === TASK REPORT === ...</talk> (or <report status="completed">...</report>)`;
 
 function buildWorkerPrompt(role?: string, agent?: Agent, isInitial?: boolean): string {
   // Kiến trúc SSoT: Toàn bộ Base Rules, Role Rules và Formats đã được đồng bộ sẵn vào .opencode/agents/<role>.md.
@@ -253,17 +300,18 @@ permission:
   "*": deny
   read:
     "*": allow
-  glob: allow
-  grep: allow
-  webfetch: allow
-  websearch: allow
   edit:
     "*": deny
     "*.md": allow
   write:
     "*": deny
     "*.md": allow
+  glob: allow
+  grep: allow
+  webfetch: allow
+  websearch: allow
   task: deny
+  bash: deny
 ---
 
 ${orchPrompt}
@@ -308,18 +356,32 @@ ${formatsSection}
 }
 
 // ============ STATE ============
+export interface AgentTask {
+  id: string;
+  task: string;
+  status: 'pending' | 'working' | 'completed';
+  createdAt: number;
+  completedAt?: number;
+}
+
 interface Agent {
   id: string; name: string; role: string; type: 'orchestrator' | 'worker';
   status: 'idle' | 'working' | 'error' | 'stopped';
   spawnedBy?: string; projectDir?: string; model?: string;
-  sessionId?: string; sessionTitle?: string; task?: string; createdAt: number;
+  teamId?: string; // Nhóm team (orchestrator) agent thuộc về — tách lịch sử chat giữa các team
+  sessionId?: string; sessionTitle?: string;
+  task?: string;
+  tasks?: AgentTask[];
+  createdAt: number;
   workingSince?: number;
   tokenUsage?: TokenUsage;
   contextLength?: number;
 }
 interface ChatMsg {
   id: string; from: string; to: string; content: string;
+  task?: string;
   timestamp: number; agentName?: string; agentRole?: string;
+  teamId?: string; // Nhóm team tin nhắn thuộc về — dùng tách lịch sử giữa các team
   msgType?: string;
   showOnUI?: boolean;
   // Dữ liệu toolcall cấu trúc lấy từ event gốc của opencode (nguồn cho UI toolcall)
@@ -502,14 +564,24 @@ function loadState() {
         continue;
       }
       const keepWorking = autoContinue && row.status === 'working';
+      const rawTasks = Array.isArray(row.tasks) ? row.tasks : (row.task ? [{ id: '1', task: String(row.task).normalize('NFC'), status: (keepWorking ? 'working' : (row.status === 'working' ? 'working' : 'pending')), createdAt: row.created_at || Date.now() }] : []);
+      const rowTasks: AgentTask[] = rawTasks.map((t: any, idx: number) => ({
+        id: String(idx + 1),
+        task: String(t.task || ''),
+        status: (t.status === 'completed' || t.status === 'pending' || t.status === 'working') ? t.status : 'working',
+        createdAt: Number(t.createdAt) || Date.now(),
+        completedAt: t.completedAt ? Number(t.completedAt) : undefined
+      }));
       const agent: Agent = {
         id: row.id, name: row.name, role: row.role, type: row.type,
         status: keepWorking ? 'working' : (row.status === 'working' ? 'idle' : row.status),
         spawnedBy: row.spawned_by, projectDir: row.project_dir, 
+        teamId: row.teamId || row.team_id || 'default',
         model: row.model || undefined,
         sessionId: row.session_id || undefined,
         sessionTitle: row.session_title ? String(row.session_title).normalize('NFC') : undefined,
         task: row.task ? String(row.task).normalize('NFC') : undefined,
+        tasks: rowTasks,
         createdAt: row.created_at, workingSince: keepWorking ? (row.workingSince || row.working_since || Date.now()) : undefined,
         tokenUsage: row.token_usage || undefined,
         contextLength: row.context_length || undefined
@@ -523,10 +595,26 @@ function loadState() {
     // Restore ACPClient.agentSessions map for all agents
     ACPClient.restoreAgentSessions(sessionEntries);
     if (!agents.has('orchestrator')) {
+      const storedOrch = storage.getAgent('orchestrator');
+      const keepOrchWorking = autoContinue && storedOrch?.status === 'working';
       const savedOrchModel = storage.getSetting('orchestratorModel', process.env.ORCHESTRATOR_MODEL);
+      const rawOrchTasks = Array.isArray(storedOrch?.tasks) ? storedOrch.tasks : (storedOrch?.task ? [{ id: '1', task: String(storedOrch.task), status: (keepOrchWorking ? 'working' : 'pending'), createdAt: storedOrch.createdAt || Date.now() }] : []);
+      const orchTasks: AgentTask[] = rawOrchTasks.map((t: any, idx: number) => ({
+        id: String(idx + 1),
+        task: String(t.task || ''),
+        status: (t.status === 'completed' || t.status === 'pending' || t.status === 'working') ? t.status : 'working',
+        createdAt: Number(t.createdAt) || Date.now(),
+        completedAt: t.completedAt ? Number(t.completedAt) : undefined
+      }));
       const orch: Agent = {
         id: 'orchestrator', name: 'Orchestrator', role: 'orchestrator', type: 'orchestrator',
-        status: 'idle', createdAt: Date.now(),
+        status: keepOrchWorking ? 'working' : 'idle',
+        createdAt: storedOrch?.createdAt || Date.now(),
+        workingSince: keepOrchWorking ? (storedOrch?.workingSince || Date.now()) : undefined,
+        task: storedOrch?.task,
+        tasks: orchTasks,
+        sessionId: storedOrch?.sessionId,
+        sessionTitle: storedOrch?.sessionTitle,
         model: savedOrchModel ? String(savedOrchModel).trim() : undefined
       };
       agents.set('orchestrator', orch);
@@ -548,6 +636,15 @@ function loadState() {
       });
     }
     console.log(`[Storage] Loaded ${savedHistory.length} messages`);
+    const savedLogs = storage.getLogs({ limit: LOG_BUFFER_MAX });
+    if (savedLogs && savedLogs.length > 0) {
+      logBuffer.length = 0;
+      for (const entry of savedLogs) {
+        const ts = new Date(entry.timestamp).toISOString();
+        logBuffer.push(`[${ts}] ${entry.message}`);
+      }
+      console.log(`[Storage] Loaded ${savedLogs.length} persisted logs into terminal buffer`);
+    }
   } catch (e: any) { console.log(`[Storage] Load error: ${e.message}`); }
 }
 
@@ -719,7 +816,7 @@ function broadcastOACEvent(agentId: string, ev: any) {
             // GATE allowThinking: chỉ broadcast khi agent đã nhận event 'in' (user chưa tắt thinking).
             try {
               if (agentThinkingAllowed.has(agentId)) {
-                broadcast('chat:thinking', { agentId, from: agentId, thinkingText: rt });
+                broadcast('chat:thinking', { agentId, from: agentId, thinkingText: rt, teamId: agents.get(agentId)?.teamId || 'default' });
               }
             } catch { /* broadcast fail không làm dừng pipeline */ }
           }
@@ -744,12 +841,17 @@ function broadcastOACEvent(agentId: string, ev: any) {
 
     // LIVE STREAM: text từ stdio được gửi dạng chat:chunk để UI gộp vào 1 bubble đang chạy
     // (upsertStreamMsg accumulate) — không tạo nhiều bubble snapshot rời rạc.
+    // FIX raw-wrap 6.40: áp stripCommandTags textDelta TRƯỚC khi broadcast → chặn <talk>/<spawn>
+    // lệnh điều phối nội bộ bị render thô trong bubble stream suốt lúc streaming.
     if (textLines.length > 0) {
+      const streamDelta = textLines.join('\n\n');
+      const strippedDelta = stripCommandTags(streamDelta);
       broadcast('chat:chunk', {
         agentId,
         from: agentId,
         to: agentId,
-        textDelta: textLines.join('\n\n')
+        textDelta: strippedDelta || '', // nếu strip hết thì gửi rỗng để UI không giữ raw
+        teamId: agents.get(agentId)?.teamId || 'default'
       });
     }
 
@@ -762,10 +864,13 @@ function broadcastOACEvent(agentId: string, ev: any) {
       content: '',
       timestamp: Date.now(),
       msgType: 'opencode',
+      teamId: agents.get(agentId)?.teamId || 'default',
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined, // Chỉ chứa ToolCall!
       thinking: evThinking || undefined, // Suy nghĩ nội bộ (hộp mờ riêng)
-      // Option C: parts giữ thứ tự emit (text + tool xen kẽ) — chỉ set khi batch có CẢ text lẫn tool
-      // (có ý nghĩa interleaving). Khi vắng parts, client render cũ (content/toolCalls/thinking).
+      // Fix interleave 6.44 (rework 6.33): GIỮ text + tool trong parts theo ĐÚNG thứ tự emit
+      // (KHÔNG còn lọc bỏ text) để UI render xen kẽ <text>/<tool> đúng vị trí. text không nhân đôi
+      // vì client (a) ẩn Khối 2 + Khối 3 khi hasParts, (b) dedup canonical reply trùng nội dung
+      // trong agent view. Condition giữ nguyên (cần cả text+tool mới set parts) — tránh parts rỗng.
       parts: (partsHasText && partsHasTool && parts.length > 0) ? parts : undefined
     };
     broadcast('chat:message', { msg });
@@ -779,18 +884,30 @@ function broadcastOACEvent(agentId: string, ev: any) {
     const oacPrev = chatHistory.find(m => m.msgType === 'opencode' && m.from === agentId);
     // Gộp parts (Option C) khi prev có parts và batch này có parts: cùng session opencode → nối chuỗi
     // segments theo đúng thứ tự batch phát sinh, để snapshot cuối phục hồi ĐẦY ĐỦ text+tool sau restart.
+    // Fix dup 6.33 — chống phình db: CAP số segments mỗi lần merge (giữ MAX_PART_SEGMENTS mới nhất).
+    // Trước đây nối [...] không giới hạn → qua nhiều batch (tool calls/events) trong 1 session, parts
+    // array tích lũy vô hạn trong chatHistory + persist → memory/db phình. Giờ luôn cắt về tối đa
+    // MAX_PART_SEGMENTS, đảm bảo snapshot không bao giờ phình; nếu vượt giữ các segments CUỐI (gần nhất).
+    const MAX_PART_SEGMENTS = 50;
     const partsMerged =
       (Array.isArray(msg.parts) && msg.parts.length > 0)
         ? ((Array.isArray(oacPrev?.parts) && (oacPrev.parts as any[]).length > 0)
-            ? [...(oacPrev.parts as any[]), ...msg.parts]
-            : msg.parts)
+            ? [...(oacPrev.parts as any[]), ...msg.parts].slice(-MAX_PART_SEGMENTS)
+            : msg.parts.slice(-MAX_PART_SEGMENTS))
         : (Array.isArray(oacPrev?.parts) && (oacPrev.parts as any[]).length > 0 ? (oacPrev.parts as any[]) : undefined);
     const mergedMsg = { ...msg,
       thinking: (msg.thinking && String(msg.thinking).trim())
         ? msg.thinking
         : (oacPrev?.thinking || undefined),
       toolCalls: (msg.toolCalls && msg.toolCalls.length) ? msg.toolCalls : (oacPrev?.toolCalls || undefined),
-      parts: partsMerged
+      // Fix interleave 6.44 (rework 6.33): khi PERSIST snapshot opencode GIỮ text + tool trong parts
+      // theo thứ tự emit (KHÔNG còn lọc bỏ text) — để sau restart/reconnect vẫn render xen kẽ đúng.
+      // partsMerged chỉ chứa {type:'text'|'tool'} (từ msg.parts + oacPrev.parts), filter chỉ là guard
+      // bỏ entry null → không mất text. Dedup với canonical reply do client xử lý (ẩn Khối 2/3 + lọc
+      // reply trùng trong agent view). Cả 2 đường broadcast+persist giờ đồng nhất text+tool.
+      parts: (Array.isArray(partsMerged) && (partsMerged as any[]).length > 0)
+        ? (partsMerged as any[]).filter((p: any) => p && (p.type === 'tool' || p.type === 'text'))
+        : undefined
     };
     const oacIdx = chatHistory.findIndex(m => m.msgType === 'opencode' && m.from === agentId);
     if (oacIdx !== -1) chatHistory[oacIdx] = mergedMsg; else chatHistory.push(mergedMsg);
@@ -820,23 +937,49 @@ function validateWorkerCompletion(content: string, agent: Agent): { valid: boole
   if (!content || content.trim().length === 0) {
     return { valid: false, reason: 'Empty response' };
   }
-  const hasToOrchestrator = /\[TO:\s*orchestrator\]/i.test(content);
+  const hasToOrchestrator = /\[TO:\s*orchestrator\]/i.test(content) || /<\s*talk\s+target=["']orchestrator["']/i.test(content);
+  const hasTalkTag = /<\s*talk\s+target=["'][^"']+["']/i.test(content) || /\[TO:\s*[^\]]+\]/i.test(content);
   const hasReportBlock = REPORT_BLOCK_RE.test(content);
   const hasCompletion = TASK_COMPLETE_RE.test(content) || /STATUS:\s*completed/i.test(content);
 
   // AUTO-ROUTE: worker quên gắn [TO: orchestrator] nhưng có report hợp lệ
   // → backend tự coi đích đến là Orchestrator, KHÔNG BAO GIỜ đánh rơi tin.
-  if (!hasToOrchestrator && hasReportBlock) {
-    console.log(`[Validate] ${agent.name}: missing [TO: orchestrator] but has report block — auto-route to orchestrator`);
+  if ((!hasToOrchestrator && !hasTalkTag) && hasReportBlock) {
+    console.log(`[Validate] ${agent.name}: missing routing tag but has report block — auto-route to orchestrator`);
     return { valid: true };
   }
-  if (!hasToOrchestrator) {
-    return { valid: false, reason: 'Missing [TO: orchestrator] tag - response not directed to orchestrator' };
+  if (hasTalkTag && !hasToOrchestrator) {
+    // Worker đang gửi tin phối hợp cho agent khác
+    return { valid: true };
   }
-  if (!hasReportBlock && !hasCompletion) {
+  if (!hasToOrchestrator && !hasTalkTag) {
+    return { valid: false, reason: 'Missing <talk target="..."> or <report> tag - response not directed to orchestrator or peer' };
+  }
+  if (!hasReportBlock && !hasCompletion && !hasTalkTag) {
     return { valid: false, reason: 'Missing REPORT format (TASK/RESEARCH/VERIFICATION/ERROR REPORT hoặc Task complete.)' };
   }
   return { valid: true };
+}
+
+function buildFormatFeedbackPrompt(reason: string, agent: Agent): string {
+  return `[SYSTEM ERROR - ĐỊNH DẠNG BÁO CÁO KHÔNG HỢP LỆ]
+Lý do bị từ chối: ${reason}
+
+BẮT BUỘC bạn phải gửi lại phản hồi bằng đúng MỘT trong hai mẫu chuẩn xác sau đây:
+
+MẪU 1: BÁO CÁO HOÀN THÀNH NHIỆM VỤ (REPORT)
+<report status="completed">
+AGENT_ID: ${agent.id}
+STATUS: completed
+FILES: <danh sách tệp đã sửa hoặc None>
+WHAT I DID: <tóm tắt ngắn gọn công việc đã làm>
+KEY_DECISIONS: <quyết định kỹ thuật quan trọng>
+</report>
+
+MẪU 2: GỬI TIN NHẮN ĐIỀU PHỐI TỚI ORCHESTRATOR (TALK)
+<talk target="orchestrator">
+Nội dung báo cáo hoặc kết quả điều tra tại đây
+</talk>`;
 }
 
 // Called when worker agent successfully completes - clear retry tracking
@@ -976,9 +1119,25 @@ End your reply with one or more routing lines, each on its own line:
 - NEVER spawn subagents. Only the Orchestrator spawns.
 ====================================`;
 
-// Helper: truncate task to first line, strip leading markdown headers, max 80 chars
+// Helper: truncate task to first line, strip leading markdown headers, max 100 chars (15-18 words)
 function truncateTask(task: string): string {
-  return (task || '').split('\n')[0].replace(/^#+\s*/, '').trim().slice(0, 80);
+  return (task || '').split('\n')[0].replace(/^#+\s*/, '').trim().slice(0, 100);
+}
+
+// Helper: format agent tasks summary for [TEAM] context
+function formatAgentTasksSummary(a: Agent): string {
+  if (Array.isArray(a.tasks) && a.tasks.length > 0) {
+    const taskStrs = a.tasks.map((t, idx) => {
+      const num = t.id || String(idx + 1);
+      const status = t.status || 'working';
+      const tNorm = (t.task || '').normalize('NFC').replace(/\s+/g, ' ').trim();
+      const text = tNorm.length > 100 ? tNorm.slice(0, 97) + '...' : tNorm;
+      return `#${num} [${status}] ${text}`;
+    });
+    return ` | Tasks: ${taskStrs.join('; ')}`;
+  }
+  const rawTask = a.task ? a.task.normalize('NFC').replace(/\s+/g, ' ').trim() : '';
+  return rawTask ? ` | Task: ${rawTask.length > 100 ? rawTask.slice(0, 97) + '...' : rawTask}` : ' | Tasks: (Trống)';
 }
 
 function buildTeam(agentId: string, full: boolean = true): string {
@@ -998,7 +1157,19 @@ function buildTeam(agentId: string, full: boolean = true): string {
     lines.push(`Your role: ${self.role}`);
     if (self.task) {
       const selfTask = self.task.normalize('NFC').replace(/\s+/g, ' ').trim();
-      lines.push(`Your task: ${selfTask.length > 80 ? selfTask.slice(0, 77) + '...' : selfTask}`);
+      lines.push(`Your task: ${selfTask.length > 100 ? selfTask.slice(0, 97) + '...' : selfTask}`);
+    }
+    if (Array.isArray(self.tasks) && self.tasks.length > 0) {
+      const taskStrs = self.tasks.map((t, idx) => {
+        const num = t.id || String(idx + 1);
+        const status = t.status || 'working';
+        const tNorm = (t.task || '').normalize('NFC').replace(/\s+/g, ' ').trim();
+        const text = tNorm.length > 100 ? tNorm.slice(0, 97) + '...' : tNorm;
+        return `#${num} [${status}] ${text}`;
+      });
+      lines.push(`Your tasks: ${taskStrs.join('; ')}`);
+    } else {
+      lines.push(`Your tasks: (Trống)`);
     }
 
     // Pair Context: Tự động gắn thông tin Coder & Verifier đồng hành
@@ -1029,9 +1200,7 @@ function buildTeam(agentId: string, full: boolean = true): string {
   lines.push('\nMembers:');
   others.forEach(a => {
     const wt = a.workingSince ? ` (${Math.round((Date.now() - a.workingSince) / 1000)}s working)` : '';
-    // Rút gọn task tối đa 80 ký tự để tránh phình context payload
-    const rawTask = a.task ? a.task.normalize('NFC').replace(/\s+/g, ' ').trim() : '';
-    const taskInfo = rawTask ? ` | Task: ${rawTask.length > 80 ? rawTask.slice(0, 77) + '...' : rawTask}` : '';
+    const taskInfo = formatAgentTasksSummary(a);
     lines.push(`  - ${a.name} (${a.role}) [${a.status}]${taskInfo}${wt} | ID: ${a.id}`);
   });
   return (lines.join('\n') + (self?.sessionId ? '' : suffix)).normalize('NFC');
@@ -1456,6 +1625,131 @@ async function parseAgentCommands(response: string, fromId: string): Promise<str
     }
   }
 
+  // 3. Task Update commands: <task_update agent="..." task="..." status="..." /> or [TASK_UPDATE agent=... task=... status=...]
+  const taskUpdateCmds = extractDualCommands(cleanResponse, ['TASK_UPDATE', 'TASK UPDATE']);
+  for (const cmd of taskUpdateCmds) {
+    const attrText = cmd.attributes || '';
+    const agentMatch = attrText.match(/(?:agent|target|agent_id|agent-id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+    const rawTarget = agentMatch ? (agentMatch[1] || agentMatch[2] || agentMatch[3] || agentMatch[4] || agentMatch[5]) : '';
+    const taskIdMatch = attrText.match(/(?:task_id|task-id|taskId|id|task_num|task-num)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+    const rawTaskId = taskIdMatch ? (taskIdMatch[1] || taskIdMatch[2] || taskIdMatch[3] || taskIdMatch[4] || taskIdMatch[5]) : '';
+    const taskMatch = attrText.match(/task\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+    const newTask = taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4] || taskMatch[5]) : (cmd.body || '').trim();
+    const statusMatch = attrText.match(/status\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i);
+    const newStatus = statusMatch ? (statusMatch[1] || statusMatch[2] || statusMatch[3] || statusMatch[4] || statusMatch[5]).toLowerCase() : '';
+
+    if (!rawTarget) {
+      const err = `[ERROR: TASK_UPDATE]
+Lý do: Thiếu thuộc tính bắt buộc 'agent' để xác định agent cần cập nhật task.
+Cú pháp đúng:
+<task_update agent="<name/id>" task="1" status="completed" /> (hoặc task="<mô tả task>")`;
+      forwardToOrchestrator('TASK_UPDATE_ERROR', err);
+      results.push(err);
+      continue;
+    }
+
+    const target = findAgentByIdNameOrRole(rawTarget);
+    if (!target) {
+      const err = `[ERROR: TASK_UPDATE]
+Lý do: Không tìm thấy agent '${rawTarget}' trong danh sách active agents.
+Cú pháp đúng:
+<task_update agent="<tên_hoặc_id_chính_xác>" task="1" status="completed" />`;
+      forwardToOrchestrator('TASK_UPDATE_ERROR', err);
+      results.push(err);
+      continue;
+    }
+
+    const updates: Partial<Agent> = {};
+    if (!target.tasks) target.tasks = [];
+
+    const normStatus = newStatus === 'completed' ? 'completed' : (newStatus === 'pending' ? 'pending' : (newStatus === 'working' ? 'working' : ''));
+    const targetTaskId = rawTaskId || (newTask && /^#?\d+$/.test(newTask.trim()) ? newTask.trim().replace(/^#/, '') : '');
+
+    if (targetTaskId) {
+      // Hỗ trợ hoàn tất/cập nhật theo Số Thứ Tự task #1, #2, #3...
+      const targetIndex = parseInt(targetTaskId, 10);
+      let found = target.tasks.find((t, idx) => t.id === targetTaskId || (!isNaN(targetIndex) && (t.id === String(targetIndex) || idx + 1 === targetIndex)));
+      if (found) {
+        if (normStatus) {
+          found.status = normStatus as any;
+          if (normStatus === 'completed') {
+            found.completedAt = Date.now();
+          }
+        }
+      }
+      updates.tasks = target.tasks;
+    } else if (newTask) {
+      const truncated = truncateTask(newTask);
+      target.task = truncated;
+      updates.task = target.task;
+
+      let found = target.tasks.find(t => t.task.toLowerCase() === truncated.toLowerCase() || t.task.toLowerCase().includes(truncated.toLowerCase()));
+      if (found) {
+        if (normStatus) {
+          found.status = normStatus as any;
+          if (normStatus === 'completed') {
+            found.completedAt = Date.now();
+          }
+        }
+      } else {
+        const itemStatus = (normStatus as any) || 'working';
+        target.tasks.push({
+          id: String(target.tasks.length + 1),
+          task: truncated,
+          status: itemStatus,
+          createdAt: Date.now(),
+          completedAt: itemStatus === 'completed' ? Date.now() : undefined
+        });
+      }
+      updates.tasks = target.tasks;
+    } else if (normStatus === 'completed') {
+      // Đánh dấu task đang working/pending gần nhất thành completed
+      const activeWorking = target.tasks.slice().reverse().find(t => t.status === 'working' || t.status === 'pending');
+      if (activeWorking) {
+        activeWorking.status = 'completed';
+        activeWorking.completedAt = Date.now();
+      }
+      updates.tasks = target.tasks;
+    }
+
+    if (newStatus && ['idle', 'working', 'blocked', 'stopped', 'error', 'completed', 'pending'].includes(newStatus)) {
+      if (newStatus === 'completed' || newStatus === 'idle') {
+        const hasWorking = target.tasks.some(t => t.status === 'working');
+        const nextPending = target.tasks.find(t => t.status === 'pending');
+        if (hasWorking) {
+          target.status = 'working';
+        } else if (nextPending && newStatus !== 'idle') {
+          nextPending.status = 'working';
+          target.task = nextPending.task;
+          target.status = 'working';
+          target.workingSince = Date.now();
+          updates.task = target.task;
+        } else {
+          target.status = 'idle';
+          target.workingSince = undefined;
+          updates.workingSince = null as any;
+        }
+      } else if (newStatus === 'working') {
+        target.status = 'working';
+        target.workingSince = Date.now();
+        updates.workingSince = target.workingSince;
+      } else if (newStatus === 'pending') {
+        // keep agent status or idle if not working
+        if (target.status !== 'working') {
+          target.status = 'idle';
+        }
+      } else {
+        target.status = newStatus as any;
+      }
+      updates.status = target.status;
+    }
+
+    storage.updateAgent(target.id, updates as any);
+    broadcast('agent:updated', { agent: target });
+    notifyTeamChanged();
+    results.push(`Updated task for ${target.name} (${target.id}): task="${target.task || ''}", status="${target.status}", totalTasks=${target.tasks.length}`);
+  }
+
   return results;
 }
 
@@ -1697,7 +1991,21 @@ function extractXmlCommand(text: string, startIndex: number, targetTag: string):
   const matchedTagName = rawTagMatch ? rawTagMatch[1] : targetTag;
   const attrText = openTag.slice(matchedTagName.length + 1, isSelfClosing ? (openTag.endsWith('/ >') ? -3 : -2) : -1).trim();
 
+  // Validate that it is a REAL command tag, not just a conversational mention of <talk> or <spawn>
+  const tagLower = tagUpper.toLowerCase();
+  const hasRoutingAttr = /\b(?:target|target-id|target_id|agent-id|agent_id|agent|role|name|to|id)\s*=/i.test(attrText);
+
+  // If tag is embedded in prose (has non-whitespace prefix on the same line that is not a tag closing),
+  // and is self-closing or does not wrap the rest of the message, treat it as inline documentation
+  const lineStart = text.lastIndexOf('\n', startIndex) + 1;
+  const linePrefix = text.substring(lineStart, startIndex).trim();
+  const isInlineInProse = linePrefix.length > 0 && !/^(?:<\/[a-z0-9_-]+>|\[\/[A-Z\s]+\])$/i.test(linePrefix);
+  if (isInlineInProse && isSelfClosing) {
+    return null;
+  }
+
   if (isSelfClosing) {
+    if (!hasRoutingAttr && (tagLower === 'talk' || tagLower === 'spawn')) return null;
     return {
       tag: tagUpper,
       attributes: attrText,
@@ -1714,9 +2022,6 @@ function extractXmlCommand(text: string, startIndex: number, targetTag: string):
   const afterOpen = text.substring(startIndex + openTag.length);
   const closeMatch = afterOpen.match(closeTagPattern);
 
-  // Validate that it is a REAL command tag, not just a conversational mention of <talk> or <spawn>
-  const tagLower = tagUpper.toLowerCase();
-  const hasRoutingAttr = /\b(?:target|target-id|target_id|agent-id|agent_id|agent|role|name|to|id)\s*=/i.test(attrText);
   if (!closeMatch && !hasRoutingAttr && !isSelfClosing) {
     return null;
   }
@@ -1825,6 +2130,15 @@ function getCodeSpanRanges(text: string): Array<[number, number]> {
   while ((bm = bqRe.exec(text)) !== null) {
     ranges.push([bm.index, bm.index + bm[0].length] as [number, number]);
   }
+  // Protect markdown list items and prose quotations that mention command tags as documentation/instruction
+  // (e.g. "- Dùng thẻ <spawn role="..." />", "1. Hãy dùng <talk target="...">", "Hướng dẫn: <spawn ...>")
+  const docListRe = /^[ \t]*(?:[-*+]|\d+\.)[ \t]+.*$/gm;
+  let dlm: RegExpExecArray | null;
+  while ((dlm = docListRe.exec(text)) !== null) {
+    if (/<(?:talk|spawn|stop|resume|create_role|create-role|delete_agent)\b|\[(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE)\b/i.test(dlm[0])) {
+      ranges.push([dlm.index, dlm.index + dlm[0].length] as [number, number]);
+    }
+  }
   return ranges;
 }
 function isInCodeSpan(idx: number, ranges: Array<[number, number]>): boolean {
@@ -1914,13 +2228,13 @@ function extractDualCommands(text: string, targetTags: string[] = ['TALK', 'SPAW
   return commands;
 }
 
-function extractBracketCommands(text: string, targetTags: string[] = ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT']): BracketCommand[] {
+function extractBracketCommands(text: string, targetTags: string[] = ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT', 'TASK_UPDATE', 'TASK UPDATE']): BracketCommand[] {
   return extractDualCommands(text, targetTags);
 }
 
 function stripCommandTags(text: string): string {
   if (!text) return '';
-  const commands = extractDualCommands(text, ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT']);
+  const commands = extractDualCommands(text, ['TALK', 'SPAWN', 'CREATE ROLE', 'STOP', 'RESUME', 'STOP AGENT', 'RESUME AGENT', 'DELETE AGENT', 'TASK_UPDATE', 'TASK UPDATE']);
   if (commands.length === 0) return text.trim();
   let result = '';
   let lastIndex = 0;
@@ -1930,8 +2244,8 @@ function stripCommandTags(text: string): string {
   }
   result += text.substring(lastIndex);
   // Loại bỏ các thẻ đóng BBCode và XML closing tags nếu còn sót
-  result = result.replace(/\[\/(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE|STOP AGENT|RESUME AGENT|DELETE AGENT)\]/gi, '');
-  result = result.replace(/<\/(?:talk|spawn|stop|stop_agent|stop-agent|resume|resume_agent|resume-agent|create_role|create-role|delete|delete_agent|delete-agent)>/gi, '');
+  result = result.replace(/\[\/(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE|STOP AGENT|RESUME AGENT|DELETE AGENT|TASK_UPDATE|TASK UPDATE)\]/gi, '');
+  result = result.replace(/<\/(?:talk|spawn|stop|stop_agent|stop-agent|resume|resume_agent|resume-agent|create_role|create-role|delete|delete_agent|delete-agent|task_update|task-update)>/gi, '');
   return result.trim();
 }
 
@@ -2274,6 +2588,19 @@ function parseOrchestratorCommands(text: string): Array<{ agentId: string; messa
     const parsed = parseTalkCommand(cmd);
     if (parsed) {
       talks.push(parsed);
+    } else if (cmd.attributes) {
+      // parseTalkCommand return null (thiếu target thực hoặc thiếu message). CHỈ forward cảnh báo khi
+      // tag có attribute TALK THỰC (target= không phải placeholder) để không bắn tin giả từ câu văn
+      // tự sự/ví dụ chứa <talk target="target-id"> mô tả. Nhánh placeholder/narrative giữ im lặng.
+      const attrText = cmd.attributes;
+      const rawTarget = (attrText.match(/(?:agent-id|agent_id|target-id|target_id|target|agent|to|id)\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|[‘]([^’]+)[’]|([^\s>]+))/i) || []).slice(1).find(v => v);
+      if (rawTarget) {
+        const cleanRaw = cleanTargetIdentifier(rawTarget.trim());
+        const isPlaceholder = !cleanRaw || INVALID_TARGET_PLACEHOLDERS.has(cleanRaw.toLowerCase()) || cleanRaw === 'worker' || cleanRaw === 'target-id' || cleanRaw === 'agent-id';
+        if (!isPlaceholder) {
+          forwardToOrchestrator('TALK_PARSE_FAIL', `[ERROR] TALK parse thất bại: target "${cleanRaw}" nhưng thiếu message nội dung. Raw: ${attrText.slice(0, 120)}`);
+        }
+      }
     }
   }
   return talks;
@@ -2284,6 +2611,8 @@ let orchTriggerDebounceTimer: NodeJS.Timeout | null = null;
 let pendingOrchTriggers: Array<{ fromAgent: Agent; message: string; reportId: string; attempts: number; targetOrchId?: string }> = [];
 const ORCH_TRIGGER_DEBOUNCE_MS = 1500; // 1.5s debounce gom báo cáo từ nhiều worker
 const ORCH_MAX_RETRY = 5; // số lần retry in-session trước khi chờ restart replay
+const deliveredReportIds = new Set<string>(); // Idempotency: tránh phát lặp 2 lần cùng một reportId trong memory lifecycle
+const AUTO_RESUME_MAX_STALE_MS = 600 * 1000; // Fix 6.42: agent workingSince quá lâu (>10 phút) khi restart → reset idle, không auto-resume
 const ABORT_ERROR_PATTERN = /Agent operation aborted by user|turn failed/i;
 // Dedup triggerOrchestrator: chống gửi trùng (fromAgent.id, nội dung) trong cửa sổ ngắn
 const ORCH_TRIGGER_DEDUP_MS = 5000;
@@ -2698,8 +3027,15 @@ if (messages.length === 0 && content && content.trim()) {
         if (msg.to !== 'user' && msg.to !== 'orchestrator' && msg.to !== 'broadcast') {
           const cleanTo = cleanTargetIdentifier(msg.to);
           const isPlaceholder = !cleanTo || INVALID_TARGET_PLACEHOLDERS.has(cleanTo.toLowerCase()) || cleanTo === 'worker' || cleanTo === 'target-id' || cleanTo === 'agent-id';
-           if (!isPlaceholder) {
-             forwardToOrchestrator('TALK_AGENT_NOT_FOUND', `[ERROR] TALK: Agent not found: ${msg.to}`);
+          if (!isPlaceholder) {
+            const notFoundMsg = `[ERROR: TALK_AGENT_NOT_FOUND]
+Lý do: Không tìm thấy agent mục tiêu '${msg.to}' trong danh sách active agents.
+Cú pháp đúng:
+<talk target="orchestrator">
+Nội dung tin nhắn gửi về Orchestrator
+</talk>
+(Hoặc kiểm tra lại danh sách ID agent trong khối [TEAM] để lấy target-id chính xác)`;
+            forwardToOrchestrator('TALK_AGENT_NOT_FOUND', notFoundMsg);
           } else {
             console.log(`[TALK] Ignored invalid placeholder target: "${msg.to}" from ${fromAgent.name}`);
           }
@@ -2742,24 +3078,28 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
     const needReinject = tc.getNeedPromptReinject() || !targetAgent.sessionId;
     if (needReinject) tc.setNeedPromptReinject(false);
 
-    // Cập nhật task cho targetAgent:
-    // - Nếu msg.task CÓ giá trị → dùng đúng msg.task (ngắn gọn).
-    // - Nếu msg.task KHÔNG có → GIỮ NGUYÊN targetAgent.task ban đầu; chỉ tự sinh
-    //   summary từ DÒNG ĐẦU TIÊN tối đa 60 ký tự khi agent chưa có task.
-    // TUYỆT ĐỐI KHÔNG gán nguyên cả đoạn msg.message dài vào targetAgent.task.
+    // Cập nhật task cho targetAgent: CHỈ cập nhật khi lệnh có truyền explicit task="..."
     const explicitTask = msg.task && msg.task.trim() ? msg.task.trim() : '';
     if (explicitTask) {
-      targetAgent.task = truncateTask(explicitTask);
-      storage.updateAgent(targetAgent.id, { task: truncateTask(explicitTask) } as any);
-      broadcast('agent:updated', { agent: targetAgent });
-    } else if ((fromAgent.role === 'orchestrator' || fromAgent.id === 'orchestrator' || fromAgent.type === 'orchestrator')
-        && (!targetAgent.task || !targetAgent.task.trim())) {
-      const summary = (msg.message || '').split('\n')[0].trim().slice(0, 60);
-      if (summary) {
-        targetAgent.task = summary;
-        storage.updateAgent(targetAgent.id, { task: summary } as any);
-        broadcast('agent:updated', { agent: targetAgent });
+      if (!targetAgent.tasks) targetAgent.tasks = [];
+      const truncated = truncateTask(explicitTask);
+      targetAgent.task = truncated;
+
+      const existing = targetAgent.tasks.find(t => t.task.toLowerCase() === truncated.toLowerCase());
+      if (existing) {
+        if (existing.status !== 'completed') {
+          existing.status = 'working';
+        }
+      } else {
+        targetAgent.tasks.push({
+          id: String(targetAgent.tasks.length + 1),
+          task: truncated,
+          status: 'working',
+          createdAt: Date.now()
+        });
       }
+      storage.updateAgent(targetAgent.id, { task: targetAgent.task, tasks: targetAgent.tasks } as any);
+      broadcast('agent:updated', { agent: targetAgent });
     }
 
     const talkHeader = `=== INCOMING MESSAGE ===\nFROM: ${fromAgent.name} (ID: ${fromAgent.id}, Role: ${fromAgent.role})\nTO: ${targetAgent.name} (ID: ${targetAgent.id}, Role: ${targetAgent.role})\n=== MESSAGE ===`;
@@ -2800,6 +3140,18 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
 
     await handleAgentResponse(tr.content, targetAgent, 'orchestrator', tr.toolCalls, tr.thinking);
     saveTranscript(tr, targetAgent.id, targetAgent.name, targetAgent.role);
+
+    const validation = validateWorkerCompletion(tr.content, targetAgent);
+    if (!validation.valid && !isEmptyAgentOutput(tr.content)) {
+      console.log(`[Talk] Agent ${targetAgent.name} completion format invalid: ${validation.reason}`);
+      const orchAgent = agents.get('orchestrator') || (storage.getAgent('orchestrator') as any);
+      if (orchAgent && targetAgent.id !== 'orchestrator') {
+        const feedbackMsg = buildFormatFeedbackPrompt(validation.reason || 'Báo cáo chưa đúng định dạng', targetAgent);
+        deliverTalk(targetAgent, orchAgent, { to: targetAgent.id, message: feedbackMsg }).catch(err => {
+          console.error(`[Feedback] Failed to deliver format feedback to ${targetAgent.name}:`, err.message);
+        });
+      }
+    }
 
     // Auto-wakeup: worker im lặng tuyệt đối (content rỗng/"(No response)") NHƯNG transcript
     // có dấu hiệu tool_use thực thi thật ([TOOL ...]) → sinh thông báo ngắn về Orchestrator
@@ -2870,8 +3222,25 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
   
   // Nếu có chuỗi [SPAWN role=...] nhưng parse thất bại (thiếu name hoặc task), chỉ cảnh báo nhẹ console,
   // tuyệt đối KHÔNG bắn tin nhắn lỗi spam về Orchestrator nếu chỉ là câu văn tự sự/ví dụ.
+  // Chỉ forward cảnh báo thật khi tag có attribute THỰC (role= + name=/task= không phải placeholder),
+  // để parse lỗi không lặng thinh mà cũng không spam tín hiệu giả từ câu văn tự sự chứa "[SPAWN role=".
   if (spawns.length === 0 && /\[SPAWN\s+role=/i.test(scanText)) {
     console.warn('[SpawnParse] Phát hiện tag [SPAWN role=...] nhưng thiếu name hoặc task hợp lệ.');
+    const spawnPlaceholders = new Set(['<role>', '<name>', '<task>', 'role', 'name', 'task', '...', 'none', 'undefined', 'null', 'your-name', '<your-name>']);
+    const spawnTagMatch = scanText.match(/\[SPAWN\s*([^\]]*)\]/i);
+    const spawnAttrs = spawnTagMatch ? spawnTagMatch[1].trim() : '';
+    if (spawnAttrs) {
+      const roleAttr = (spawnAttrs.match(/role\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s>]+))/i) || []).slice(1).find(v => v && !spawnPlaceholders.has(v.trim().toLowerCase()));
+      const hasRealName = (spawnAttrs.match(/name\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s>]+))/i) || []).slice(1).some(v => v && !spawnPlaceholders.has(v.trim().toLowerCase()));
+      const hasRealTask = (spawnAttrs.match(/task\s*=\s*(?:"([^"]+)"|'([^']+)'|[“]([^”]+)[”]|([^\s>]+))/i) || []).slice(1).some(v => v && !spawnPlaceholders.has(v.trim().toLowerCase()));
+      if (roleAttr && (hasRealName || hasRealTask)) {
+        const parseErrorContent = `[ERROR: SPAWN_PARSE_FAIL]
+Lý do: Cú pháp lệnh <spawn> không hợp lệ hoặc thiếu thuộc tính bắt buộc (cần 'role', 'name', 'task'). Raw: ${spawnAttrs.slice(0, 120)}
+Cú pháp đúng:
+<spawn role="coder" name="coder-1" task="Mô tả nhiệm vụ cụ thể tại đây" />`;
+        forwardToOrchestrator('SPAWN_PARSE_FAIL', parseErrorContent);
+      }
+    }
   }
 
   for (const spawn of spawns) {
@@ -2881,12 +3250,29 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
        if (existing.status === 'working') {
        commandResults.push(`[WARN] Agent ${name} (${existing.id}) is already working; reusing with new task may interrupt current work.`);
      }
-       commandResults.push(`Reused ${name} (${existing.id})`);
-       existing.status = 'working';
-       existing.workingSince = Date.now();
-       existing.task = task;
-       storage.updateAgent(existing.id, { status: 'working', workingSince: existing.workingSince });
-       broadcast('agent:updated', { agent: existing });
+        commandResults.push(`Reused ${name} (${existing.id})`);
+        existing.status = 'working';
+        existing.workingSince = Date.now();
+        if (task && task.trim()) {
+          const truncated = truncateTask(task.trim());
+          existing.task = truncated;
+          if (!existing.tasks) existing.tasks = [];
+          const found = existing.tasks.find(t => t.task.toLowerCase() === truncated.toLowerCase());
+          if (found) {
+            if (found.status !== 'completed') {
+              found.status = 'working';
+            }
+          } else {
+            existing.tasks.push({
+              id: String(existing.tasks.length + 1),
+              task: truncated,
+              status: 'working',
+              createdAt: Date.now()
+            });
+          }
+        }
+        storage.updateAgent(existing.id, { status: 'working', workingSince: existing.workingSince, task: existing.task, tasks: existing.tasks } as any);
+        broadcast('agent:updated', { agent: existing });
       
       const reuseTaskMsg: ChatMsg = {
         id: uuidv4(),
@@ -2966,7 +3352,13 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
 
       if (activeRoleAgents.length >= roleLimit) {
         const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
-        const errorContent = `[Role Limit] Không thể spawn agent "${name}" role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng <talk target="...">...</talk> hoặc [TALK agent-id=... message=...] để giao việc.`;
+        const firstAgentId = activeRoleAgents[0]?.id || 'agent-id';
+        const errorContent = `[ERROR: SPAWN_ROLE_LIMIT]
+Lý do: Đã đạt giới hạn tối đa cho vai trò '${role}' (hiện có ${activeRoleAgents.length}/${roleLimit} active: [${existingListStr}]).
+Cú pháp đúng: Tái sử dụng agent hiện có bằng cách gửi tin nhắn:
+<talk target="${firstAgentId}">
+Nội dung phân công nhiệm vụ mới tại đây
+</talk>`;
         console.warn(`[Role Limit] ${errorContent}`);
         commandResults.push(errorContent);
 
@@ -2990,7 +3382,8 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
       const spawnId = 'agent-' + uuidv4().slice(0, 8);
       const na: Agent = {
         id: spawnId, name, role, type: 'worker', status: 'working',
-        spawnedBy: 'orchestrator', task, createdAt: Date.now(), workingSince: Date.now(),
+        spawnedBy: 'orchestrator', task, teamId: 'default', createdAt: Date.now(), workingSince: Date.now(),
+        tasks: task ? [{ id: '1', task, status: 'working', createdAt: Date.now() }] : [],
         sessionTitle: task ? task.substring(0, 80) : undefined
       };
       agents.set(spawnId, na);
@@ -3087,9 +3480,24 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
     ta.workingSince = Date.now();
     // Update task if provided in TALK command
     if (task && task.trim()) {
-      ta.task = truncateTask(task.trim());
+      const truncated = truncateTask(task.trim());
+      ta.task = truncated;
+      if (!ta.tasks) ta.tasks = [];
+      const found = ta.tasks.find(t => t.task.toLowerCase() === truncated.toLowerCase());
+      if (found) {
+        if (found.status !== 'completed') {
+          found.status = 'working';
+        }
+      } else {
+        ta.tasks.push({
+          id: String(ta.tasks.length + 1),
+          task: truncated,
+          status: 'working',
+          createdAt: Date.now()
+        });
+      }
     }
-    storage.updateAgent(ta.id, { status: 'working', workingSince: ta.workingSince, task: ta.task } as any);
+    storage.updateAgent(ta.id, { status: 'working', workingSince: ta.workingSince, task: ta.task, tasks: ta.tasks } as any);
     broadcast('agent:updated', { agent: ta });
 
     const talkMsg: ChatMsg = {
@@ -3112,13 +3520,6 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
         const needReinject = tc.getNeedPromptReinject() || !ta.sessionId;
         if (needReinject) tc.setNeedPromptReinject(false);
         const talkHeader = `=== INCOMING MESSAGE ===\nFROM: Orchestrator (orchestrator)\nTO: ${ta.name} (ID: ${ta.id}, Role: ${ta.role})\n=== MESSAGE ===`;
-        
-        // Cập nhật task cho ta nếu có nội dung mới (luôn truncate)
-        const trimmedMsg = message.trim();
-        if (trimmedMsg) {
-          ta.task = truncateTask(trimmedMsg);
-          storage.updateAgent(ta.id, { task: truncateTask(trimmedMsg) } as any);
-        }
         const talkTeam = buildTeam(ta.id);
         // [TASK] đã được hiển thị trong Your task: ở [TEAM] block, không cần lặp lại
         const talkPrompt = `[TEAM]\n${talkTeam}\n[/TEAM]\n\n${talkHeader}\n${message}\n\n${WORKER_REMINDER}`;
@@ -3248,10 +3649,16 @@ app.get('/api/agents', (_req, res) => {
 });
 
 app.post('/api/agents', async (req, res) => {
-  const { name, role: rawRole, type: rawType, spawnedBy, projectDir, task, model } = req.body;
+  const { name, role: rawRole, type: rawType, spawnedBy, projectDir, task, model, teamId } = req.body;
   const isOrch = rawType === 'orchestrator' || rawRole === 'orchestrator';
   const role = isOrch ? 'orchestrator' : (rawRole || 'coder');
   const type = isOrch ? 'orchestrator' : (rawType || 'worker');
+
+  // Hướng A — gán teamId cho agent mới:
+  // - Orchestrator mới (+ New Team): sinh teamId UUID MỚI → lịch sử chat riêng biệt với team cũ.
+  // - Worker mới: kế thừa teamId của agent cha (spawnedBy) nếu có, ngược lại 'default'.
+  const parentTeamId = spawnedBy ? (agents.get(spawnedBy)?.teamId || 'default') : 'default';
+  const newTeamId = isOrch ? (teamId || `team-${uuidv4().slice(0, 8)}`) : (teamId || parentTeamId);
 
   if (!isOrch) {
     // 1. Kiểm tra bất thường: nếu > 2 con thì tự động xóa bớt 1 con bất kỳ
@@ -3263,7 +3670,13 @@ app.post('/api/agents', async (req, res) => {
 
     if (activeRoleAgents.length >= roleLimit) {
       const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
-      const errorMsg = `[Role Limit] Không thể tạo agent role "${role}" do đã đạt tối đa (max ${roleLimit}, hiện có ${activeRoleAgents.length}). Danh sách agent hiện có cùng role: [${existingListStr}]. Hãy dùng <talk target="...">...</talk> hoặc [TALK agent-id=... message=...] để giao việc.`;
+      const firstAgentId = activeRoleAgents[0]?.id || 'agent-id';
+      const errorMsg = `[ERROR: CREATE_ROLE_LIMIT]
+Lý do: Đã đạt giới hạn tối đa cho vai trò '${role}' (hiện có ${activeRoleAgents.length}/${roleLimit} active: [${existingListStr}]).
+Cú pháp đúng: Tái sử dụng agent hiện có bằng cách gửi tin nhắn:
+<talk target="${firstAgentId}">
+Nội dung phân công nhiệm vụ mới tại đây
+</talk>`;
       console.warn(`[API /api/agents] ${errorMsg}`);
       
       // Gửi tin nhắn lỗi về Main Orchestrator
@@ -3290,14 +3703,15 @@ app.post('/api/agents', async (req, res) => {
   const id = 'agent-' + uuidv4().slice(0, 8);
   const agent: Agent = {
     id, name: name || (isOrch ? `Orchestrator-${id.slice(-4)}` : `Agent-${id.slice(-4)}`), role,
-    type, status: 'idle', spawnedBy, projectDir, task, model, createdAt: Date.now(), sessionId: undefined
+    type, status: 'idle', spawnedBy, projectDir, task, model, teamId: newTeamId, createdAt: Date.now(), sessionId: undefined,
+    tasks: task ? [{ id: '1', task, status: 'pending', createdAt: Date.now() }] : []
   };
   agents.set(id, agent); storage.saveAgent(agent);
   broadcast('agent:created', { agent });
   notifyTeamChanged(); // Agent mới được thêm vào team
   // Tạo tin nhắn đầu để user thấy ngay agent đã sẵn sàng
   const spawnMsg: ChatMsg = {
-    id: uuidv4(), from: 'system', to: id,
+    id: uuidv4(), from: 'system', to: id, teamId: newTeamId,
     content: `[SPAWN] Agent "${agent.name}" (${agent.role}) created and ready.${agent.task ? ` Task: ${agent.task}` : ''}`,
     timestamp: Date.now(), agentName: agent.name, agentRole: agent.role
   };
@@ -3471,7 +3885,7 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
   let agentName = 'Orchestrator', agentRole = 'orchestrator';
   let prompt: string;
   let sid: string | null = null;
-  const client = targetAgent ? getClient(targetAgent) : getOrchClient();
+  const client = targetAgent ? getClient(targetAgent) : getOrchClient(resolvedTargetId || 'orchestrator');
   const commandResults: string[] = [];
 
   // ============ PRESERVE & AUTO-MERGE UNPROCESSED USER MESSAGES ============
@@ -3729,8 +4143,15 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
       }
       saveTranscript(result, targetAgent.id, targetAgent.name, targetAgent.role);
       const validation = validateWorkerCompletion(result.content, targetAgent);
-      if (!validation.valid) {
+      if (!validation.valid && !isEmptyAgentOutput(result.content)) {
         console.log(`[Chat] Agent ${targetAgent.name} completion format invalid: ${validation.reason}`);
+        const orchAgent = agents.get('orchestrator') || (storage.getAgent('orchestrator') as any);
+        if (orchAgent && targetAgent.id !== 'orchestrator') {
+          const feedbackMsg = buildFormatFeedbackPrompt(validation.reason || 'Báo cáo chưa đúng định dạng', targetAgent);
+          deliverTalk(targetAgent, orchAgent, { to: targetAgent.id, message: feedbackMsg }).catch(err => {
+            console.error(`[Feedback] Failed to deliver format feedback to ${targetAgent.name}:`, err.message);
+          });
+        }
       }
       clearAgentRetry(targetAgent.id);
     }
@@ -3939,11 +4360,15 @@ app.post('/api/chat', async (req, res) => {
 
     // Xử lý thông báo tức thời cho lệnh /compact (chỉ kích hoạt khi là lệnh đứng độc lập)
     if (/^\s*\/compact\s*$/i.test(rawMsg)) {
+      const isOrch = !targetAgent || targetAgent.id === 'orchestrator' || resolvedTargetId === 'orchestrator';
+      const targetName = isOrch ? 'Orchestrator' : (targetAgent ? targetAgent.name : 'Agent');
+      const targetId = isOrch ? (resolvedTargetId || 'orchestrator') : (targetAgent ? targetAgent.id : resolvedTargetId);
+
       const compactNotice: ChatMsg = {
         id: uuidv4(),
         from: 'system',
-        to: resolvedTargetId || 'orchestrator',
-        content: `⚡ Đang thực hiện rút gọn ngữ cảnh (/compact) cho ${targetAgent ? targetAgent.name : 'Orchestrator'}...`,
+        to: targetId,
+        content: `⚡ Đang gửi lệnh /compact chính thức tới session của ${targetName}...`,
         timestamp: Date.now(),
         agentName: 'System',
         agentRole: 'system'
@@ -3953,14 +4378,14 @@ app.post('/api/chat', async (req, res) => {
       broadcast('chat:message', { msg: compactNotice });
 
       try {
-        const client = targetAgent ? getClient(targetAgent) : null;
-        const sid = client?.getSessionId() || targetAgent?.sessionId;
+        const client = isOrch ? getOrchClient(targetId) : (targetAgent ? getClient(targetAgent) : null);
+        const sid = client?.getSessionId() || targetAgent?.sessionId || (isOrch ? agents.get('orchestrator')?.sessionId : undefined);
         if (!sid) {
           const errMsg: ChatMsg = {
             id: uuidv4(),
             from: 'system',
             to: 'user',
-            content: '⚠️ Không thể thực hiện /compact: chưa có sessionId đang hoạt động.',
+            content: `⚠️ Không thể thực hiện /compact: ${targetName} chưa có sessionId đang hoạt động.`,
             timestamp: Date.now(),
             agentName: 'System',
             agentRole: 'system'
@@ -3976,7 +4401,9 @@ app.post('/api/chat', async (req, res) => {
           id: uuidv4(),
           from: 'system',
           to: 'user',
-          content: ok ? '✅ Đã rút gọn ngữ cảnh (/compact) thành công.' : '❌ Rút gọn ngữ cảnh (/compact) thất bại hoặc không thể kết nối OpenCode Serve.',
+          content: ok
+            ? `✅ Đã gửi lệnh /compact chính thức tới session ${sid}.`
+            : `❌ Gửi lệnh /compact tới session ${sid} thất bại hoặc không thể kết nối OpenCode Serve.`,
           timestamp: Date.now(),
           agentName: 'System',
           agentRole: 'system'
@@ -4217,15 +4644,36 @@ app.post('/api/settings/models', (req, res) => {
 
 // ============ ORCHESTRATOR ============
 app.get('/api/history', (req, res) => {
-  // Pagination support: ?limit=N (mặc định 200, tối đa 1000) & ?beforeId=<msgId> (tin nhắn cũ hơn id này) & ?agentId=<id>
+  // Pagination support: ?limit=N (mặc định 200, tối đa 1000) & ?beforeId=<msgId> (tin nhắn cũ hơn id này) & ?agentId=<id> & ?teamId=<id>
   const qLimit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : undefined;
   const qBeforeId = req.query.beforeId !== undefined ? String(req.query.beforeId) : undefined;
   const qAgentId = req.query.agentId !== undefined ? String(req.query.agentId) : undefined;
-  res.json(storage.getHistoryPage({
+  const qTeamId = req.query.teamId !== undefined ? String(req.query.teamId) : undefined;
+  // Phương án 1: khi client chỉ gửi agentId (không gửi teamId) → server tự resolve teamId từ agent
+  // trong agents map để lọc history theo đúng team của agent đó → tách cross-team triệt để (worker
+  // team cũ / tin team khác không lẫn), KHÔNG cần sửa App.tsx client.
+  let teamFilter: string | undefined = qTeamId;
+  if (qAgentId && teamFilter === undefined) {
+    const agent = agents.get(qAgentId);
+    if (agent) teamFilter = agent.teamId || 'default';
+  }
+  const history = storage.getHistoryPage({
     limit: Number.isFinite(qLimit) ? qLimit : undefined,
     beforeId: qBeforeId,
-    agentId: qAgentId
-  }));
+    agentId: qAgentId,
+    teamId: teamFilter
+  });
+  // Fix interleave 6.44 (rework 6.33): khi trả history về client, GIỮ text + tool trong parts cho mọi
+  // snapshot opencode (msgType==='opencode') để sau restart/reconnect vẫn render xen kẽ đúng thứ tự.
+  // Chỉ guard bỏ entry null — KHÔNG lọc text. Dedup với canonical reply do client xử lý (agent view
+  // lọc reply trùng nội dung khi đã có snapshot interleave; Khối 2/3 ẩn khi hasParts).
+  const sanitized = history.map((m: any) => {
+    if (m && m.msgType === 'opencode' && Array.isArray(m.parts)) {
+      return { ...m, parts: m.parts.filter((p: any) => p && (p.type === 'tool' || p.type === 'text')) };
+    }
+    return m;
+  });
+  res.json(sanitized);
 });
 app.get('/api/messages', (_req, res) => res.json(chatHistory));
 
@@ -4402,6 +4850,153 @@ app.post('/api/restart', (_req, res) => {
     }
     process.exit(0);
   }, 500);
+});
+
+// ============ TERMINAL / LOGS ROUTES ============
+// API logs lưu trong Database (hỗ trợ filter level, source, agentId, limit)
+app.get('/api/logs', (req, res) => {
+  const { level, source, agentId, limit, beforeId } = req.query;
+  const logs = storage.getLogs({
+    level: typeof level === 'string' ? level : undefined,
+    source: typeof source === 'string' ? source : undefined,
+    agentId: typeof agentId === 'string' ? agentId : undefined,
+    limit: typeof limit === 'string' ? parseInt(limit, 10) : undefined,
+    beforeId: typeof beforeId === 'string' ? beforeId : undefined,
+  });
+  res.json({ logs, count: logs.length });
+});
+
+app.post('/api/logs/clear', (_req, res) => {
+  storage.clearLogs();
+  logBuffer.length = 0;
+  res.json({ success: true, message: 'Logs cleared successfully' });
+});
+
+// Trả toàn bộ ring buffer (kim nên đảm bảo đặt TRƯỚC static serving để không bị nuốt bởi /v2).
+app.get('/logs', (_req, res) => {
+  res.json({ lines: [...logBuffer], max: LOG_BUFFER_MAX, count: logBuffer.length });
+});
+// Trang HTML nhúng xem terminal realtime: fetch /api/logs + /logs + EventSource(/api/events) lọc terminal:line / log:entry.
+app.get('/terminal', (_req, res) => {
+  const html = `<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>agentforge — terminal</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height:100%; margin:0; background:#090d14; color:#d4d6d9; font-family:'JetBrains Mono','Consolas','Menlo','Courier New',monospace; font-size:12.5px; }
+  /* terminal titlebar */
+  #bar { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; padding:6px 12px; background:#0e131d; color:#94a3b8; border-bottom:1px solid rgba(255,255,255,0.08); user-select:none; z-index:10; }
+  #bar b { color:#38bdf8; font-weight:700; }
+  #actions { display:flex; align-items:center; gap:8px; }
+  #cnt { font-size:11px; color:#64748b; }
+  .btn-clear { background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.35); color:#f87171; border-radius:4px; padding:2px 8px; font-size:11px; font-weight:600; cursor:pointer; font-family:inherit; }
+  .btn-clear:hover { background:rgba(239,68,68,0.25); color:#fca5a5; }
+  /* log area */
+  #log { padding:10px 14px; white-space:pre-wrap; word-break:break-all; line-height:1.55; }
+  #log div { margin:0; padding:1px 0; }
+  #log .ts { color:#38bdf8; }        /* timestamp sáng xanh */
+  #log .err { color:#f87171; font-weight:600; }       /* lỗi đỏ */
+  #log .warn { color:#fbbf24; }      /* cảnh báo vàng */
+  #wrap { height:calc(100% - 34px); overflow-y:auto; }
+  /* prompt + blinking caret */
+  #prompt { display:flex; align-items:center; gap:6px; padding:2px 14px 10px; color:#38bdf8; white-space:nowrap; }
+  #prompt .ps { color:#4ade80; font-weight:600; }
+  #caret { display:inline-block; width:8px; height:15px; background:#4ade80; animation:blink 1s step-end infinite; vertical-align:middle; }
+  @keyframes blink { 50% { opacity:0; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>agentforge@terminal: ~</b>
+  <div id="actions">
+    <span id="cnt">0 dòng — /api/logs</span>
+    <button class="btn-clear" onclick="clearLogs()">🗑️ Clear Logs</button>
+  </div>
+</div>
+<div id="wrap"><div id="log">đang kết nối và tải lịch sử logs…</div></div>
+<div id="prompt"><span class="ps">[agentforge@terminal ~]$</span><span id="caret"></span></div>
+<script>
+  var box = document.getElementById('log');
+  var cnt = document.getElementById('cnt');
+  var wrap = document.getElementById('wrap');
+
+  function appendLine(line, level){
+    if (!line) return;
+    var d = document.createElement('div');
+    d.textContent = line;
+    var str = String(line);
+    if (level === 'error' || str.indexOf('[ERROR]') >= 0 || str.indexOf('❌') >= 0 || str.indexOf('Error:') >= 0) {
+      d.className = 'err';
+    } else if (level === 'warn' || str.indexOf('[WARN]') >= 0 || str.indexOf('⚠️') >= 0) {
+      d.className = 'warn';
+    }
+    box.appendChild(d);
+    cnt.textContent = box.childElementCount + ' dòng — /api/logs';
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  function clearLogs(){
+    if (!confirm('Bạn có chắc muốn xóa toàn bộ logs?')) return;
+    fetch('/api/logs/clear', { method: 'POST' }).then(function(r){ return r.json(); }).then(function(d){
+      box.innerHTML = '';
+      appendLine('[System] Logs cleared at ' + new Date().toLocaleTimeString());
+    }).catch(function(e){
+      alert('Lỗi xóa logs: ' + e.message);
+    });
+  }
+
+  // 1. Tải log lịch sử từ /api/logs (persisted database) + fallback /logs ring buffer
+  function loadInitialLogs(){
+    fetch('/api/logs?limit=500').then(function(r){ return r.json(); }).then(function(data){
+      box.innerHTML = '';
+      if (data && Array.isArray(data.logs) && data.logs.length > 0) {
+        data.logs.forEach(function(item){
+          var line = typeof item === 'string' ? item : (item.message || JSON.stringify(item));
+          appendLine(line, item.level);
+        });
+      } else {
+        // Fallback /logs
+        fetch('/logs').then(function(r){ return r.json(); }).then(function(d){
+          (d.lines || []).forEach(function(l){ appendLine(l); });
+          if (box.childElementCount === 0) {
+            appendLine('[System] Terminal ready. Log stream active.');
+          }
+        });
+      }
+      wrap.scrollTop = wrap.scrollHeight;
+    }).catch(function(){
+      fetch('/logs').then(function(r){ return r.json(); }).then(function(d){
+        box.innerHTML = '';
+        (d.lines || []).forEach(function(l){ appendLine(l); });
+        wrap.scrollTop = wrap.scrollHeight;
+      });
+    });
+  }
+
+  loadInitialLogs();
+
+  // 2. Lắng nghe log realtime qua EventSource
+  var es = new EventSource('/api/events');
+  es.onmessage = function(ev){
+    try {
+      var m = JSON.parse(ev.data);
+      if (m.type === 'terminal:line' && m.line) {
+        appendLine(m.line);
+      } else if (m.type === 'log:entry' && m.entry) {
+        var txt = typeof m.entry === 'string' ? m.entry : (m.entry.message || JSON.stringify(m.entry));
+        appendLine(txt, m.entry.level);
+      }
+    } catch(e){}
+  };
+  es.onerror = function(){ /* keepalive reconnect tự động */ };
+</script>
+</body>
+</html>
+`;
+  res.type('html').send(html);
 });
 
 // ============ STATIC ============
@@ -4613,17 +5208,72 @@ process.on('SIGTERM', () => {
 async function autoResumeWorkingAgents() {
   try {
     if (storage.getSetting('autoContinue', false) !== true) return;
-    const orchAgent = agents.get('orchestrator');
+    const orchAgent = agents.get('orchestrator') || (storage.getAgent('orchestrator') as any);
     if (!orchAgent) return;
+    const now = Date.now();
+
+    // 1. Resume Main Orchestrator if it was working
+    if (orchAgent.status === 'working') {
+      if (typeof orchAgent.workingSince === 'number' && now - orchAgent.workingSince > AUTO_RESUME_MAX_STALE_MS) {
+        console.log(`[AutoContinue] Bỏ qua Orchestrator: workingSince quá lâu (${Math.round((now - orchAgent.workingSince) / 1000)}s) → reset idle.`);
+        orchAgent.status = 'idle';
+        orchAgent.workingSince = undefined;
+        storage.updateAgent(orchAgent.id, { status: 'idle', workingSince: null } as any);
+        broadcast('agent:updated', { agent: orchAgent });
+      } else {
+        console.log(`[AutoContinue] Resuming Main Orchestrator session...`);
+        const orchClient = getOrchClient('orchestrator');
+        const team = buildTeam('orchestrator');
+        const prompt = `[TEAM]\n${team}\n[/TEAM]\n\n=== RESUME WORK ===\n.\n\n${ORCH_REMINDER}`;
+        orchClient.enqueue(prompt).then(async (result) => {
+          const sid = orchClient.getSessionId();
+          if (sid) {
+            orchAgent.sessionId = sid;
+            ACPClient.registerSession('orchestrator', sid);
+          }
+          if (result.tokenUsage) orchAgent.tokenUsage = result.tokenUsage;
+          if (result.contextLength) orchAgent.contextLength = result.contextLength;
+          orchAgent.status = 'idle';
+          orchAgent.workingSince = undefined;
+          storage.updateAgent('orchestrator', {
+            status: 'idle',
+            workingSince: null,
+            sessionId: orchAgent.sessionId,
+            tokenUsage: orchAgent.tokenUsage,
+            contextLength: orchAgent.contextLength
+          });
+          broadcast('agent:updated', { agent: orchAgent });
+          await handleOrchestratorResponse(result.content, (result as any).thinking || '');
+        }).catch((err) => {
+          console.error(`[AutoContinue] Failed to resume Orchestrator: ${err.message}`);
+          orchAgent.status = 'idle';
+          orchAgent.workingSince = undefined;
+          storage.updateAgent('orchestrator', { status: 'idle', workingSince: null } as any);
+          broadcast('agent:updated', { agent: orchAgent });
+        });
+      }
+    }
+
+    // 2. Resume Worker Agents
     const stuck: Agent[] = [];
     for (const a of agents.values()) {
       if (a.id === 'orchestrator') continue;
-      if (a.status === 'working' && a.task && String(a.task).trim() !== '') {
-        stuck.push(a);
+      if (a.status !== 'working' || !a.task || String(a.task).trim() === '') continue;
+      // Fix 6.42: agent có workingSince quá lâu (>10 phút) khi restart → coi là kẹt do crash/restart
+      // trước đó, reset về idle + bỏ task cũ, KHÔNG auto-resume (tránh ép chạy lại task vô nghĩa).
+      if (typeof a.workingSince === 'number' && now - a.workingSince > AUTO_RESUME_MAX_STALE_MS) {
+        console.log(`[AutoContinue] Bỏ qua ${a.name} (${a.id}): workingSince quá lâu (${Math.round((now - a.workingSince) / 1000)}s) → reset idle, không resume task cũ.`);
+        a.status = 'idle';
+        a.workingSince = undefined;
+        a.task = undefined;
+        storage.updateAgent(a.id, { status: 'idle', workingSince: null } as any);
+        broadcast('agent:updated', { agent: a });
+        continue;
       }
+      stuck.push(a);
     }
     if (stuck.length === 0) {
-      console.log('[AutoContinue] No stuck working agent to resume.');
+      console.log('[AutoContinue] No stuck working worker agent to resume.');
       return;
     }
     console.log(`[AutoContinue] Resuming ${stuck.length} working agent(s): ${stuck.map(a => a.name).join(', ')}`);
@@ -4643,9 +5293,32 @@ async function autoResumeWorkingAgents() {
 async function replayPendingReports() {
   const pending = storage.getPendingOutbox();
   if (pending.length === 0) return;
-  console.log(`[Outbox] Replaying ${pending.length} pending report(s) from DB...`);
-  storage.resetOutboxAttempts(pending.map(r => r.id));
-  for (const r of pending) {
+  // Idempotent Replay: loại bỏ các report đã được phát trong memory lifecycle hiện tại
+  const unplayed = pending.filter(r => !deliveredReportIds.has(r.id));
+  if (unplayed.length === 0) { storage.pruneDeliveredOutbox(); return; }
+
+  // Dedup mới-nhất-per-target: Nếu có nhiều pending record gửi tới cùng 1 target, chỉ giữ lại bản ghi mới nhất đại diện cho trạng thái hiện tại
+  const newestPerTarget = new Map<string, number>();
+  for (const r of unplayed) {
+    const cur = newestPerTarget.get(r.to) || 0;
+    if (r.createdAt > cur) newestPerTarget.set(r.to, r.createdAt);
+  }
+  const superseded = unplayed.filter(r => r.to !== 'orchestrator' && r.createdAt < (newestPerTarget.get(r.to) || 0));
+  for (const r of superseded) {
+    console.log(`[Outbox] Bỏ qua ${r.id} (đã có tin mới hơn cho ${r.to}) → delivered.`);
+    deliveredReportIds.add(r.id);
+    storage.markOutboxDelivered(r.id);
+  }
+  const finalReplay = unplayed.filter(r => r.to === 'orchestrator' || r.createdAt === (newestPerTarget.get(r.to) || r.createdAt));
+  if (finalReplay.length === 0) { storage.pruneDeliveredOutbox(); return; }
+  console.log(`[Outbox] Replaying ${finalReplay.length} pending report(s) from DB...`);
+  storage.resetOutboxAttempts(finalReplay.map(r => r.id));
+  for (const r of finalReplay) {
+    if (deliveredReportIds.has(r.id)) continue;
+    deliveredReportIds.add(r.id);
+    // Đánh dấu markOutboxDelivered(r.id) ngay khi bắt đầu tiến trình giao tin để tránh khoảng trống giao dịch nếu server sập đột ngột
+    storage.markOutboxDelivered(r.id);
+
     const fromAgent = (agents.get(r.fromAgentId) || {
       id: r.fromAgentId, name: r.fromAgentName, role: r.fromAgentRole
     }) as Agent;
@@ -4655,9 +5328,6 @@ async function replayPendingReports() {
       const target = agents.get(r.to) || findAgentByIdNameOrRole(r.to);
       if (target) {
         await deliverTalk(target, fromAgent, { to: r.to, message: r.message }, r.id);
-      } else {
-        // Agent đích đã bị xóa → đánh dấu delivered để không retry vô hạn
-        storage.markOutboxDelivered(r.id);
       }
     }
   }
@@ -4779,7 +5449,7 @@ process.on('unhandledRejection', (reason) => {
   try { ACPClient.killAllChildProcesses(); } catch {}
 });
 
-// Khởi động: dò port trống chủ động từ PORT (mặc định 3001) rồi mới bind;
+// Khởi động: dò port trống chủ động từ PORT (mặc định 4001) rồi mới bind;
 // startServerWithPortFallback vẫn là lớp phòng thủ EADDRINUSE nếu port bị chiếm sau lúc dò.
 findAvailablePort(PORT).then((freePort) => {
   if (freePort !== PORT) {

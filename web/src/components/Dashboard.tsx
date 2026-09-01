@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { parseAgentTaskList, renderAgentTaskList } from '../utils/taskUtils';
 
 interface Agent {
   id: string;
@@ -7,6 +8,7 @@ interface Agent {
   type: string;
   status: string;
   task?: string;
+  tasks?: Array<{ id?: string; task: string; status: string }>;
   sessionTitle?: string;
   model?: string;
   spawnedBy?: string;
@@ -53,11 +55,12 @@ const getRoleIcon = (role?: string): string => {
 
 const renderStatusBadge = (status: string) => {
   const isWorking = status === 'working';
-  const isError = status === 'error';
-  const dotColor = isWorking ? 'var(--wb-success-strong)' : isError ? 'var(--wb-danger-strong)' : 'var(--wb-muted)';
-  const textCol = isWorking ? 'var(--wb-success-strong)' : isError ? 'var(--wb-danger)' : 'var(--text-muted)';
-  const bgCol = isWorking ? 'rgba(34, 197, 94, 0.15)' : isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(100, 116, 139, 0.15)';
-  const borderCol = isWorking ? 'rgba(34, 197, 94, 0.35)' : isError ? 'rgba(239, 68, 68, 0.35)' : 'rgba(100, 116, 139, 0.25)';
+  const isError = status === 'error' || status === 'blocked';
+  const dotColor = isWorking ? 'var(--wb-success-strong)' : isError ? '#ef4444' : 'var(--wb-muted)';
+  const textCol = isWorking ? 'var(--wb-success-strong)' : isError ? '#f87171' : 'var(--text-muted)';
+  const bgCol = isWorking ? 'rgba(34, 197, 94, 0.15)' : isError ? 'rgba(239, 68, 68, 0.18)' : 'rgba(100, 116, 139, 0.15)';
+  const borderCol = isWorking ? 'rgba(34, 197, 94, 0.35)' : isError ? 'rgba(239, 68, 68, 0.45)' : 'rgba(100, 116, 139, 0.25)';
+  const label = status === 'error' ? '⚠️ Lỗi' : status === 'blocked' ? '⚠️ Blocked' : status;
 
   return (
     <div style={{
@@ -69,8 +72,9 @@ const renderStatusBadge = (status: string) => {
       background: bgCol,
       border: `1px solid ${borderCol}`,
       fontSize: 11,
-      fontWeight: 600,
-      color: textCol
+      fontWeight: 700,
+      color: textCol,
+      whiteSpace: 'nowrap'
     }}>
       <span
         className={isWorking ? 'pulsing-green' : isError ? 'pulsing-red' : ''}
@@ -82,7 +86,7 @@ const renderStatusBadge = (status: string) => {
           display: 'inline-block'
         }}
       />
-      <span>{status}</span>
+      <span>{label}</span>
     </div>
   );
 };
@@ -93,6 +97,27 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [creatingOrch, setCreatingOrch] = useState(false);
   const safeAgents = Array.isArray(agents) ? agents : [];
+
+  // Card element refs & auto-scroll on error/blocked status
+  const agentCardRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
+  const prevStatusesRef = React.useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    safeAgents.forEach(a => {
+      const prev = prevStatusesRef.current[a.id];
+      const isNowError = a.status === 'error' || a.status === 'blocked';
+      const wasNotError = prev !== 'error' && prev !== 'blocked';
+      if (isNowError && wasNotError) {
+        const el = agentCardRefs.current[a.id];
+        if (el) {
+          try {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          } catch {}
+        }
+      }
+      prevStatusesRef.current[a.id] = a.status;
+    });
+  }, [safeAgents]);
 
   // Group orchestrators and worker hierarchy
   const orchAgents = safeAgents.filter(a => a.id === 'orchestrator' || a.type === 'orchestrator' || a.role === 'orchestrator');
@@ -111,7 +136,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
     if (!name || !name.trim()) return;
     setCreatingOrch(true);
     try {
-      await fetch('/api/agents', {
+      const res = await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,6 +145,12 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
           type: 'orchestrator'
         })
       });
+      const data = await res.json().catch(() => null);
+      // Hướng B: sau khi tạo team mới thành công → chuyển tab sang orchestrator vừa tạo
+      // (không xóa history cũ trên server — chỉ tách view theo teamId mới).
+      if (data?.ok && data?.agent?.id) {
+        onSelect(data.agent.id);
+      }
     } catch (e) {
       console.error('Failed to create orchestrator:', e);
     } finally {
@@ -250,6 +281,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {sortedOrchs.map((orch) => {
           const isOrchSelected = selectedAgentId === (orch.id === 'orchestrator' ? null : orch.id) || (selectedAgentId === 'orchestrator' && orch.id === 'orchestrator');
+          const isOrchError = orch.status === 'error' || orch.status === 'blocked';
           const isMain = orch.id === 'orchestrator';
           const isCollapsed = Boolean(collapsed[orch.id]);
 
@@ -277,14 +309,27 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
             <div key={orch.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {/* Orchestrator Header Card (2-Line Compact Layout) */}
               <div
+                ref={(el) => { agentCardRefs.current[orch.id] = el; }}
                 onClick={() => onSelect(isMain ? null : orch.id)}
                 className="interactive-card af-card"
                 style={{
-                  background: isOrchSelected ? 'var(--bg-card-active)' : 'var(--bg-card)',
+                  background: isOrchError
+                    ? 'rgba(239, 68, 68, 0.15)'
+                    : isOrchSelected
+                    ? 'var(--bg-card-active)'
+                    : 'var(--bg-card)',
                   borderRadius: 8,
                   padding: '9px 11px',
-                  border: isOrchSelected ? '2px solid var(--accent-strong)' : '1px solid var(--af-border)',
-                  boxShadow: isOrchSelected ? '0 0 24px -2px var(--accent)' : 'none',
+                  border: isOrchError
+                    ? '1px solid #ef4444'
+                    : isOrchSelected
+                    ? '2px solid var(--accent-strong)'
+                    : '1px solid var(--af-border)',
+                  boxShadow: isOrchError
+                    ? '0 0 16px rgba(239, 68, 68, 0.25)'
+                    : isOrchSelected
+                    ? '0 0 24px -2px var(--accent)'
+                    : 'none',
                   cursor: 'pointer',
                   width: '100%',
                   maxWidth: '100%',
@@ -480,6 +525,7 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                   ) : (
                     childWorkers.map((agent) => {
                       const isSelected = selectedAgentId === agent.id;
+                      const isError = agent.status === 'error' || agent.status === 'blocked';
                       const roleIcon = getRoleIcon(agent.role);
                       const agentRawTokens = agent.contextLength || (agent.tokenUsage && typeof agent.tokenUsage === 'object' ? ((agent.tokenUsage as any).totalTokens || (agent.tokenUsage as any).total) : agent.tokenUsage);
                       const agentTokens = formatTokens(agentRawTokens);
@@ -496,14 +542,27 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                       return (
                         <div
                           key={agent.id}
+                          ref={(el) => { agentCardRefs.current[agent.id] = el; }}
                           onClick={() => onSelect(agent.id)}
                           className={`interactive-card af-card${agent.status === 'working' ? ' af-working' : ''}`}
                           style={{
-                            background: isSelected ? 'var(--bg-card-active)' : 'var(--bg-card)',
+                            background: isError
+                              ? 'rgba(239, 68, 68, 0.15)'
+                              : isSelected
+                              ? 'var(--bg-card-active)'
+                              : 'var(--bg-card)',
                             borderRadius: 10,
                             padding: 12,
-                            border: isSelected ? '2px solid var(--accent-strong)' : '1px solid var(--af-border)',
-                            boxShadow: isSelected ? '0 0 24px -2px var(--accent)' : 'none',
+                            border: isError
+                              ? '1px solid #ef4444'
+                              : isSelected
+                              ? '2px solid var(--accent-strong)'
+                              : '1px solid var(--af-border)',
+                            boxShadow: isError
+                              ? '0 0 16px rgba(239, 68, 68, 0.25)'
+                              : isSelected
+                              ? '0 0 24px -2px var(--accent)'
+                              : 'none',
                             cursor: 'pointer'
                           }}
                         >
@@ -611,20 +670,31 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                             </div>
                           )}
 
-                          {agent.task && (
-                            <div style={{
-                              fontSize: 12,
-                              color: 'var(--text-muted)',
-                              marginTop: 5,
-                              lineHeight: 1.4,
-                              display: '-webkit-box',
-                              WebkitLineClamp: 2,
-                              WebkitBoxOrient: 'vertical',
-                              overflow: 'hidden'
-                            }}>
-                              {agent.task}
-                            </div>
-                          )}
+                          {(() => {
+                            const parsedTasks = parseAgentTaskList(agent);
+                            if (!Array.isArray(parsedTasks) || parsedTasks.length === 0) return null;
+                            return (
+                              <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 4,
+                                marginTop: 6,
+                                padding: '6px 8px',
+                                background: agent.status === 'working' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                                borderRadius: 6,
+                                border: agent.status === 'working' ? '1px solid rgba(59, 130, 246, 0.45)' : '1px solid var(--af-border)'
+                              }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: agent.status === 'working' ? 'var(--accent, #3b82f6)' : 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <span>{agent.status === 'working' ? '⚡ Đang thực thi:' : '🎯 Nhiệm vụ:'}</span>
+                                  </span>
+                                </div>
+                                <div style={{ maxHeight: 110, overflowY: 'auto' }}>
+                                  {renderAgentTaskList(parsedTasks)}
+                                </div>
+                              </div>
+                            );
+                          })()}
 
                           <select
                             value={agent.model || ''}
