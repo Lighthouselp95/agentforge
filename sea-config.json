@@ -1,0 +1,33 @@
+{
+  "main": "dist/sea-server.cjs",
+  "output": "dist/sea-prep.blob",
+  "disableExperimentalSEAWarning": true,
+  "useSnapshot": false,
+  "useCodeCache": false,
+  "assets": {
+    "dist/index.html": "C:/Users/Hai Dang/agentforge/dist/index.html",
+    "web/dist/assets/index-C9vL-7OO.css": "C:/Users/Hai Dang/agentforge/web/dist/assets/index-C9vL-7OO.css",
+    "web/dist/assets/index-H8dmRYwv.js": "C:/Users/Hai Dang/agentforge/web/dist/assets/index-H8dmRYwv.js",
+    "web/dist/index.html": "C:/Users/Hai Dang/agentforge/web/dist/index.html",
+    "src/prompts/formats/agent-message.md": "C:/Users/Hai Dang/agentforge/src/prompts/formats/agent-message.md",
+    "src/prompts/formats/error-report.md": "C:/Users/Hai Dang/agentforge/src/prompts/formats/error-report.md",
+    "src/prompts/formats/task-report.md": "C:/Users/Hai Dang/agentforge/src/prompts/formats/task-report.md",
+    "src/prompts/orchestrator.md": "C:/Users/Hai Dang/agentforge/src/prompts/orchestrator.md",
+    "src/prompts/orchestrator.md.bak": "C:/Users/Hai Dang/agentforge/src/prompts/orchestrator.md.bak",
+    "src/prompts/orchestrator.md.bak2": "C:/Users/Hai Dang/agentforge/src/prompts/orchestrator.md.bak2",
+    "src/prompts/orchestrator.md.bak4": "C:/Users/Hai Dang/agentforge/src/prompts/orchestrator.md.bak4",
+    "src/prompts/roles/coder.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/coder.md",
+    "src/prompts/roles/coder.md.bak_core_engine": "C:/Users/Hai Dang/agentforge/src/prompts/roles/coder.md.bak_core_engine",
+    "src/prompts/roles/debugger.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/debugger.md",
+    "src/prompts/roles/docs.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/docs.md",
+    "src/prompts/roles/idea.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/idea.md",
+    "src/prompts/roles/planner.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/planner.md",
+    "src/prompts/roles/researcher.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/researcher.md",
+    "src/prompts/roles/reviewer.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/reviewer.md",
+    "src/prompts/roles/searcher.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/searcher.md",
+    "src/prompts/roles/tester.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/tester.md",
+    "src/prompts/roles/verifier.md": "C:/Users/Hai Dang/agentforge/src/prompts/roles/verifier.md",
+    "src/prompts/worker-base.md": "C:/Users/Hai Dang/agentforge/src/prompts/worker-base.md",
+    "src/prompts/worker-base.md.bak_core_engine": "C:/Users/Hai Dang/agentforge/src/prompts/worker-base.md.bak_core_engine"
+  }
+}

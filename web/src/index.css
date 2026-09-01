@@ -1,0 +1,508 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root,
+html[data-theme='dark'] {
+  /* ===== Design Tokens — DARK OBSIDIAN / DEEP CHARCOAL (Linear / Cursor / VS Code Dark Modern) ===== */
+  --bg-main: #090d14;
+  --bg-panel: #0e131d;
+  --bg-inset: #121824;
+  --bg-input: #151d2c;
+  --bg-card: #101622;
+  --bg-card-active: #161f30;
+  --af-border: rgba(255, 255, 255, 0.08);
+  --af-border-strong: rgba(255, 255, 255, 0.15);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --shadow-panel: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 16px 50px rgba(0, 0, 0, 0.6);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --report-label: #fde047;
+  --af-bg-sidebar: #0e131d;
+  --toolblock-bg: #182234;
+  --toolblock-head-bg: #182234;
+  --toolblock-code-bg: #182234;
+  --toolblock-border: rgba(255, 255, 255, 0.12);
+  --toolblock-head-border: rgba(255, 255, 255, 0.08);
+  --toolblock-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+
+  /* ===== Workbench Tokens — DARK OBSIDIAN ===== */
+  --wb-activity-bg: #070a10;
+  --wb-activity-icon: #64748b;
+  --wb-activity-icon-active: #f1f5f9;
+  --wb-activity-border: rgba(255, 255, 255, 0.08);
+  --wb-tab-bg: #121824;
+  --wb-tab-active: #101622;
+  --wb-tab-hover: rgba(255, 255, 255, 0.06);
+  --wb-tab-border: rgba(255, 255, 255, 0.10);
+  --wb-statusbar-bg: #070a10;
+  --wb-statusbar-text: #94a3b8;
+  --wb-panel-bg: #0e131d;
+  --wb-panel-border: rgba(255, 255, 255, 0.08);
+  --wb-tree-hover: rgba(255, 255, 255, 0.06);
+  --wb-tree-active: rgba(59, 130, 246, 0.16);
+  --wb-chat-tab-bg: #0e131d;
+  --wb-chat-tab-active: #101622;
+  --wb-chat-tab-hover: rgba(255, 255, 255, 0.05);
+  --wb-chat-tab-border: rgba(255, 255, 255, 0.08);
+  --wb-success: #4ade80;
+  --wb-success-strong: #34d399;
+  --wb-success-bg: rgba(34, 197, 94, 0.14);
+  --wb-success-border: rgba(34, 197, 94, 0.32);
+  --wb-danger: #f87171;
+  --wb-danger-strong: #ef4444;
+  --wb-danger-bg: rgba(239, 68, 68, 0.14);
+  --wb-danger-border: rgba(239, 68, 68, 0.35);
+  --wb-warn: #fbbf24;
+  --wb-warn-bg: rgba(250, 204, 21, 0.12);
+  --wb-warn-border: rgba(250, 204, 21, 0.35);
+  --wb-info: #3b82f6;
+  --wb-info-bg: rgba(59, 130, 246, 0.12);
+  --wb-info-border: rgba(59, 130, 246, 0.3);
+  --wb-purple: #a5b4fc;
+  --wb-purple-bg: rgba(99, 102, 241, 0.12);
+  --wb-purple-border: rgba(99, 102, 241, 0.24);
+  --wb-cyan: #22d3ee;
+  --wb-muted: #64748b;
+  --wb-token-bg: rgba(59, 130, 246, 0.12);
+  --wb-token-border: rgba(59, 130, 246, 0.25);
+
+  /* Legacy aliases (giữ tương thích biến cũ trong codebase) */
+  --bg-primary: var(--bg-main);
+  --bg-secondary: var(--bg-panel);
+  --bg-tertiary: var(--bg-inset);
+  --bg-card-hover: #26324d;
+  --border-focus: #4cc2ff;
+}
+
+html[data-theme='light'] {
+  /* ===== Design Tokens — LIGHT (Off-white hiện đại, không trắng xóa, cool) ===== */
+  --bg-main: #f5f7fa;
+  --bg-panel: #ffffff;
+  --bg-inset: #eef2f6;
+  --bg-input: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-active: #e9f2ff;
+  --af-border: rgba(15, 23, 42, 0.08);
+  --af-border-strong: rgba(15, 23, 42, 0.16);
+  --text-primary: #0f172a;
+  --text-secondary: #3c4b63;
+  --text-muted: #64748b;
+  --accent: #2563eb;
+  --accent-strong: #0ea5e9;
+  --accent-soft: rgba(37, 99, 235, 0.10);
+  --shadow-panel: 0 8px 30px rgba(15, 23, 42, 0.06);
+  --shadow-pop: 0 16px 50px rgba(15, 23, 42, 0.12);
+  --report-label: #b45309;
+  --af-bg-sidebar: #f5f7fa;
+  --toolblock-bg: #f1f5f9;
+  --toolblock-head-bg: #f1f5f9;
+  --toolblock-code-bg: #f1f5f9;
+  --toolblock-border: rgba(15, 23, 42, 0.10);
+  --toolblock-head-border: rgba(15, 23, 42, 0.08);
+  --toolblock-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+
+  /* ===== Workbench Tokens — LIGHT (cool minimal, có layer) ===== */
+  --wb-activity-bg: #e9eef4;
+  --wb-activity-icon: #526079;
+  --wb-activity-icon-active: #0f172a;
+  --wb-activity-border: rgba(15, 23, 42, 0.10);
+  --wb-tab-bg: #e3e9f1;
+  --wb-tab-active: #ffffff;
+  --wb-tab-hover: rgba(15, 23, 42, 0.06);
+  --wb-tab-border: rgba(15, 23, 42, 0.12);
+  --wb-statusbar-bg: #e9eef4;
+  --wb-statusbar-text: #3c4b63;
+  --wb-panel-bg: #ffffff;
+  --wb-panel-border: rgba(15, 23, 42, 0.10);
+  --wb-tree-hover: rgba(15, 23, 42, 0.06);
+  --wb-tree-active: rgba(37, 99, 235, 0.12);
+  --wb-chat-tab-bg: #eef2f6;
+  --wb-chat-tab-active: #ffffff;
+  --wb-chat-tab-hover: rgba(15, 23, 42, 0.06);
+  --wb-chat-tab-border: rgba(15, 23, 42, 0.12);
+  --wb-success: #16a34a;
+  --wb-success-strong: #059669;
+  --wb-success-bg: rgba(22, 163, 74, 0.1);
+  --wb-success-border: rgba(22, 163, 74, 0.3);
+  --wb-danger: #dc2626;
+  --wb-danger-strong: #b91c1c;
+  --wb-danger-bg: rgba(220, 38, 38, 0.1);
+  --wb-danger-border: rgba(220, 38, 38, 0.3);
+  --wb-warn: #b45309;
+  --wb-warn-bg: rgba(180, 83, 9, 0.1);
+  --wb-warn-border: rgba(180, 83, 9, 0.3);
+  --wb-info: #0284c7;
+  --wb-info-bg: rgba(2, 132, 199, 0.1);
+  --wb-info-border: rgba(2, 132, 199, 0.3);
+  --wb-purple: #6d28d9;
+  --wb-purple-bg: rgba(109, 40, 217, 0.1);
+  --wb-purple-border: rgba(109, 40, 217, 0.25);
+  --wb-cyan: #0891b2;
+  --wb-muted: #64748b;
+  --wb-token-bg: rgba(2, 132, 199, 0.1);
+  --wb-token-border: rgba(2, 132, 199, 0.28);
+
+  /* Legacy aliases */
+  --bg-primary: var(--bg-main);
+  --bg-secondary: var(--bg-panel);
+  --bg-tertiary: var(--bg-inset);
+  --bg-card: var(--bg-card);
+  --bg-card-hover: #dfe6ef;
+  --border-color: var(--af-border);
+  --border-focus: var(--accent);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  text-rendering: optimizeLegibility;
+}
+
+/* Mobile: neo đúng viewport động (thanh address bar ẩn/hiện), chống tràn trang */
+html, body, #root {
+  height: 100%;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Custom Sleek Scrollbar — siêu mỏng 4px */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+
+/* Status Pulsing Animations */
+@keyframes pulse-glow-green {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6), 0 0 8px rgba(34, 197, 94, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0), 0 0 14px rgba(34, 197, 94, 0.8);
+  }
+}
+
+@keyframes pulse-glow-blue {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6), 0 0 8px rgba(59, 130, 246, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(59, 130, 246, 0), 0 0 14px rgba(59, 130, 246, 0.8);
+  }
+}
+
+@keyframes pulse-glow-red {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+  }
+}
+
+.pulsing-green {
+  animation: pulse-glow-green 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+.pulsing-blue {
+  animation: pulse-glow-blue 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+.pulsing-red {
+  animation: pulse-glow-red 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.25s ease-out forwards;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin-icon {
+  animation: spin 1.2s linear infinite;
+}
+
+/* Button & Card interactive transitions */
+.interactive-card {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.interactive-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(76, 194, 255, 0.5) !important;
+  box-shadow: 0 4px 18px -2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(76, 194, 255, 0.2);
+}
+
+.glass-panel {
+  background: rgba(19, 26, 43, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ============ THEME LIGHT/DARK ============ */
+/* Dark = mặc định hiện tại. Light: hiện đại tối giản, nền trắng, viền mảnh, ít bóng. */
+html[data-theme='light'] {
+  --bg-primary: #f5f7fa;
+  --bg-secondary: #eef2f6;
+  --bg-tertiary: #e3e9f1;
+  --bg-card: #ffffff;
+  --border-color: rgba(15, 23, 42, 0.08);
+  --text-primary: #0f172a;
+  --text-secondary: #3c4b63;
+  --text-muted: #64748b;
+}
+
+html[data-theme='light'] body {
+  background-color: #f5f7fa;
+}
+
+/* --- Override surface có inline-style cứng bằng !important qua hook class --- */
+html[data-theme='light'] .af-shell {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%) !important;
+  color: #0f172a !important;
+}
+html[data-theme='light'] .af-sidebar {
+  background: #f8fafc !important;
+  border-right-color: rgba(15, 23, 42, 0.08) !important;
+}
+html[data-theme='light'] .af-resizer {
+  background: rgba(15, 23, 42, 0.06) !important;
+}
+html[data-theme='light'] .af-chatpanel {
+  background: #ffffff !important;
+}
+html[data-theme='light'] .af-chat-header {
+  background: #f8fafc !important;
+  border-bottom-color: rgba(15, 23, 42, 0.08) !important;
+}
+html[data-theme='light'] .af-chat-title {
+  color: #0f172a !important;
+}
+html[data-theme='light'] .af-chat-scroll {
+  background: #ffffff !important;
+}
+html[data-theme='light'] .af-chat-input {
+  background: #f8fafc !important;
+  border-top-color: rgba(15, 23, 42, 0.08) !important;
+}
+html[data-theme='light'] .af-chat-input textarea {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+/* Dialogs */
+html[data-theme='light'] .af-overlay {
+  background: rgba(15, 23, 42, 0.40) !important;
+}
+html[data-theme='light'] .af-dialog-box {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.10) !important;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12) !important;
+  border-radius: 12px !important;
+}
+html[data-theme='light'] .af-card {
+  background: #ffffff !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Dashboard (light) */
+html[data-theme='light'] .af-dashboard {
+  color: #0f172a;
+}
+html[data-theme='light'] .af-card {
+  background: #ffffff !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Offline connection badge — hiệu ứng cảnh báo nhẹ */
+@keyframes af-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.af-conn-badge-off {
+  animation: af-blink 1.6s ease-in-out infinite;
+}
+
+/* ============ CHAT BUBBLE THEMES ============ */
+/* Dark Theme: Bo góc mềm mại 12px đồng bộ, viền mờ siêu mảnh, nền mờ sang trọng */
+html[data-theme='dark'] .af-bubble,
+:root .af-bubble {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+  padding: 12px 16px !important;
+  color: #e8edf3 !important;
+  width: fit-content !important;
+  max-width: 88% !important;
+}
+
+html[data-theme='dark'] .af-bubble-user,
+:root .af-bubble-user {
+  background: rgba(76, 194, 255, 0.14) !important;
+  border: 1px solid rgba(76, 194, 255, 0.28) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+  padding: 10px 14px !important;
+  color: #e8edf3 !important;
+  width: fit-content !important;
+  max-width: 85% !important;
+}
+
+/* Light Theme: Bo góc 12px, viền mờ #e2e8f0, nền trắng #ffffff sạch sẽ, đổ bóng nhẹ */
+html[data-theme='light'] .af-bubble {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  padding: 12px 16px !important;
+  color: #0f172a !important;
+  width: fit-content !important;
+  max-width: 88% !important;
+}
+
+html[data-theme='light'] .af-bubble-user {
+  background: #eff6ff !important;
+  border: 1px solid #bfdbfe !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.06) !important;
+  padding: 10px 14px !important;
+  color: #1e3a8a !important;
+  width: fit-content !important;
+  max-width: 85% !important;
+}
+
+/* ===== 3-LAYER SURFACE ELEVATION ===== */
+.af-toolblock {
+  background: var(--toolblock-bg) !important;
+  border: 1px solid var(--toolblock-border) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--toolblock-shadow) !important;
+}
+
+.af-toolblock-head {
+  background: var(--toolblock-head-bg) !important;
+  border-bottom: 1px solid var(--toolblock-head-border) !important;
+}
+
+.af-toolblock-body,
+.af-toolblock pre {
+  background: var(--toolblock-code-bg) !important;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace !important;
+  font-size: 11.5px !important;
+  font-weight: 450 !important;
+  line-height: 1.5 !important;
+  letter-spacing: 0.1px !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  color: var(--text-primary) !important;
+}
+
+/* ToolCallBlock (light) */
+html[data-theme='light'] .af-toolblock {
+  background: var(--toolblock-bg) !important;
+  border-color: var(--toolblock-border) !important;
+}
+html[data-theme='light'] .af-toolblock-head {
+  background: var(--toolblock-head-bg) !important;
+  border-bottom-color: var(--toolblock-head-border) !important;
+}
+html[data-theme='light'] .af-toolblock-body,
+html[data-theme='light'] .af-toolblock pre {
+  background: var(--toolblock-code-bg) !important;
+  color: var(--text-primary) !important;
+}
+html[data-theme='light'] .af-thinking {
+  background: #f8fafc !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* ============ MODERN MINIMALIST MOTION & ELEVATION ============ */
+.af-shell,
+.af-sidebar,
+.af-chatpanel,
+.af-chat-header,
+.af-chat-input,
+.af-bubble,
+.af-toolblock,
+.af-thinking,
+.af-card,
+.af-dialog-box,
+.af-resizer {
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.af-elevate {
+  box-shadow: var(--shadow-panel);
+}
+.af-pop {
+  box-shadow: var(--shadow-pop);
+}
+
+/* Sidebar: pulse nhe khi agent dang working */
+@keyframes af-working-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); border-color: var(--af-border); }
+  50% { box-shadow: 0 0 14px 2px var(--accent-soft); border-color: var(--accent); }
+}
+.af-card.af-working {
+  animation: af-working-pulse 2.4s ease-in-out infinite;
+}

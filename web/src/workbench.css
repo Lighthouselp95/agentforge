@@ -1,0 +1,323 @@
+/* ============================================================
+   WORKBENCH — VS Code-style layout (activity bar, tabs, status
+   bar, bottom panel). Dùng VAR(--) TOKEN, KHÔNG hex cứng.
+   ============================================================ */
+
+/* ===== ACTIVITY BAR (dọc trái ~48px) ===== */
+.af-activitybar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 48px;
+  min-width: 48px;
+  background: var(--wb-activity-bg);
+  border-right: 1px solid var(--wb-activity-border);
+  flex-shrink: 0;
+  padding: 6px 0;
+  gap: 4px;
+  user-select: none;
+}
+
+.af-activitybar-item {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--wb-activity-icon);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  position: relative;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.af-activitybar-item:hover {
+  background: var(--accent-soft);
+  color: var(--wb-activity-icon-active);
+  transform: scale(1.04);
+}
+
+.af-activitybar-item.af-active {
+  color: var(--wb-activity-icon-active);
+  background: var(--accent-soft);
+}
+
+/* Cạnh trái (VS Code-style indicator) */
+.af-activitybar-item.af-active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  background: var(--accent);
+  border-radius: 0 3px 3px 0;
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.af-activitybar-title {
+  font-size: 10px;
+  color: var(--wb-activity-icon);
+  margin-top: 4px;
+}
+
+/* ===== STATUS BAR (đáy) ===== */
+.af-statusbar {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  background: var(--wb-statusbar-bg);
+  color: var(--wb-statusbar-text);
+  border-top: 1px solid var(--wb-activity-border);
+  padding: 0 10px;
+  gap: 14px;
+  font-size: 11px;
+  flex-shrink: 0;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Dark: gradient indigo → deep, có sọc accent trái */
+html[data-theme='dark'] .af-statusbar {
+  background: linear-gradient(90deg, #101b36 0%, var(--wb-statusbar-bg) 38%, #101b36 100%);
+  border-top: 1px solid rgba(76, 194, 255, 0.25);
+}
+html[data-theme='dark'] .af-statusbar::before {
+  content: '';
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+}
+
+/* Light: nền xám sáng mượt, chữ tối */
+html[data-theme='light'] .af-statusbar {
+  background: linear-gradient(90deg, #e2e8f0 0%, var(--wb-statusbar-bg) 40%, #e2e8f0 100%);
+  border-top: 1px solid rgba(15, 23, 42, 0.10);
+}
+
+.af-statusbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--wb-statusbar-text);
+  cursor: default;
+}
+
+.af-statusbar-item.af-clickable {
+  cursor: pointer;
+}
+
+.af-statusbar-item:hover.af-clickable {
+  background: var(--wb-tree-hover);
+}
+
+.af-statusbar-spacer {
+  flex: 1;
+}
+
+/* Badge nhấp nháy trên nút toggle queue khi có tin chờ đang flush */
+.af-queue-toggle.af-hasqueue {
+  position: relative;
+  color: var(--wb-success-strong);
+  font-weight: 700;
+}
+.af-queue-toggle.af-hasqueue::after {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--wb-success);
+  box-shadow: 0 0 6px var(--wb-success);
+  animation: af-queue-pulse 1.1s ease-in-out infinite;
+}
+@keyframes af-queue-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* ===== BOTTOM PANEL (collapsible) ===== */
+/* Fix underbar 6.43: panel là FLOATING OVERLAY (absolute) neo đáy shell, phía trên status bar
+   (22px). KHÔNG chiếm chỗ trong flex column → không đẩy/bóp khung chat. Chỉ mở khi user toggle. */
+.af-bottompanel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--wb-panel-bg);
+  border-top: 1px solid var(--wb-panel-border);
+  border-radius: 10px 10px 0 0;
+  overflow: hidden;
+  box-shadow: 0 -10px 32px rgba(0, 0, 0, 0.35);
+  max-height: 55vh;
+}
+
+/* Dark: bo góc trên, glow viền accent nhẹ */
+html[data-theme='dark'] .af-bottompanel {
+  border-top: 1px solid rgba(76, 194, 255, 0.18);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.af-bottompanel-header {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--wb-panel-bg);
+  border-bottom: 1px solid var(--wb-panel-border);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.af-bottompanel-header:hover {
+  background: var(--wb-tree-hover);
+}
+
+.af-bottompanel-body {
+  overflow-y: auto;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* ===== TAB BAR (VS Code editor tabs trên ChatPanel) ===== */
+.af-tabbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  height: 34px;
+  background: var(--wb-chat-tab-bg);
+  border-bottom: 1px solid var(--wb-chat-tab-border);
+  flex-shrink: 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Ẩn scrollbar nhưng VẪN scroll được (wheel/trackpad/touch) — overflow-x: auto giữ nguyên */
+  scrollbar-width: none; /* Firefox */
+  padding-bottom: 0;
+}
+
+/* Ẩn scrollbar WebKit (Chrome/Edge/Safari) — vẫn scroll được qua wheel/touch vì overflow-x: auto giữ nguyên */
+.af-tabbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.af-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  min-width: 120px;
+  max-width: 200px;
+  padding: 0 10px;
+  background: var(--wb-chat-tab-bg);
+  color: var(--text-secondary);
+  border-right: 1px solid var(--wb-chat-tab-border);
+  font-size: 12.5px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.af-tab:hover {
+  background: var(--wb-chat-tab-hover);
+}
+
+.af-tab.af-active {
+  background: var(--wb-chat-tab-active);
+  color: var(--text-primary);
+  border-top: 2px solid var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent-soft), inset 0 -1px 0 var(--wb-chat-tab-border);
+}
+
+.af-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.af-tab-close:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.af-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.af-tab-dot.working {
+  background: var(--wb-success);
+  box-shadow: 0 0 5px var(--wb-success);
+}
+
+.af-tab-dot.blocked {
+  background: var(--wb-danger);
+}
+
+.af-tab-dot.idle {
+  background: var(--wb-muted);
+}
+
+.af-tab-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.af-tab-role {
+  color: var(--text-muted);
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Spinner nhỏ báo đang working trên tab */
+.af-tab-spin {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 2px solid var(--wb-success-bg);
+  border-top-color: var(--wb-success);
+  border-radius: 50%;
+  animation: af-spin 0.8s linear infinite;
+}
+
+@keyframes af-spin {
+  to { transform: rotate(360deg); }
+}
