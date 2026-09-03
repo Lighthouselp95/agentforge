@@ -1,6 +1,6 @@
 {
   "name": "agentforge",
-  "version": "6.31.6",
+  "version": "7.0.6",
   "main": "dist-electron/main.js",
   "bin": "dist/server.js",
   "description": "ACP Multi-Agent Orchestrator with GUI",

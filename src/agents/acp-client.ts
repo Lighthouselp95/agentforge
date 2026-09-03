@@ -110,10 +110,11 @@ export class ACPClient {
 
   private pushOACEvent(ev: any) {
     if (!this.onEvent) return;
-    this.eventBuf.push(ev);
-    if (!this.eventTimer) {
-      this.eventTimer = setInterval(() => this.flushOACEvents(), 250);
-      if (typeof this.eventTimer.unref === 'function') this.eventTimer.unref();
+    // Bắn trực tiếp tức thì ra event callback (Zero-latency immediate streaming)
+    try {
+      this.onEvent({ kind: 'batch', seq: ++this.eventSeq, events: [ev] });
+    } catch (e: any) {
+      console.error('[ACPClient] pushOACEvent error:', e?.message || e);
     }
   }
 
@@ -455,7 +456,7 @@ export class ACPClient {
           cwd: projectDir,
           env: utf8Env,
           windowsHide: true,
-          stdio: 'ignore' // Hoàn toàn im lặng, không bắt pipe gây treo
+          stdio: ['pipe', 'pipe', 'pipe'] // Gắn stdin pipe từ Node: khi Node thoát/đóng pipe, process con tự exit
         }
       );
 
@@ -463,6 +464,15 @@ export class ACPClient {
       if (pid) {
         ACPClient.activeChildPids.add(pid);
       }
+
+      injectProc.stdin?.on('error', () => {
+        try {
+          if (pid) {
+            if (isWin) execSync(`taskkill /pid ${pid} /T /F`, { timeout: 3000, stdio: 'ignore' });
+            else injectProc.kill('SIGKILL');
+          }
+        } catch {}
+      });
 
       injectProc.on('close', () => {
         if (pid) ACPClient.activeChildPids.delete(pid);
@@ -708,13 +718,24 @@ export class ACPClient {
           {
             cwd: projectDir,
             env: utf8Env,
-            windowsHide: true
+            windowsHide: true,
+            stdio: ['pipe', 'pipe', 'pipe']
           }
         );
         this.proc = proc as any;
         if (proc.pid) {
           ACPClient.activeChildPids.add(proc.pid);
         }
+
+        // Listener: khi stream stdin lỗi hoặc pipe đóng bất thường, tự động kill child process
+        proc.stdin?.on('error', () => {
+          try {
+            if (proc.pid) {
+              if (isWin) execSync(`taskkill /pid ${proc.pid} /T /F`, { timeout: 3000, stdio: 'ignore' });
+              else proc.kill('SIGKILL');
+            }
+          } catch {}
+        });
 
         const stdoutDecoder = new StringDecoder('utf8');
         const stderrDecoder = new StringDecoder('utf8');

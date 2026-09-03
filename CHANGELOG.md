@@ -1,5 +1,112 @@
 # Changelog
 
+## v7.0.6 (2026-09-04)
+
+### Bản Phát Hành Đóng Gói Nhị Phân Binary Standalone Release v7.0.6
+- **Cập nhật Version v7.0.6**: Đồng bộ toàn bộ phiên bản trong `package.json`, `web/package.json` và hằng số `APP_VERSION` trong `src/server.ts` lên `7.0.6`.
+- **Tích hợp đầy đủ các bản vá v7.0.4**:
+  - Khắc phục triệt để lỗi nuốt text trong `getCodeSpanRanges` khi gặp thẻ report không đóng, đảm bảo các lệnh `<talk>` và `<spawn>` luôn được bóc tách và tạo card riêng.
+  - Làm sạch tag điều phối ở mọi tầng trên Frontend UI (`ChatPanel.tsx` Khối 2.5 và regex toàn cục).
+  - Tương thích Sub-Orchestrator toàn diện và mở khóa `ReportCard` trực quan cho luồng OpenCode.
+- **Packaging Binary SEA v7.0.6**:
+  - Đóng gói và phát hành thành công binary standalone `release/agentforge-web-v7.0.6.exe` và `release/agentforge-web.exe`.
+
+---
+
+## v7.0.4 (2026-09-04)
+
+### Khắc Phục Lỗi Gộp Bubble Giao Việc & Hoàn Thiện Tách Riêng Directive Card Trên UI Main
+- **Backend Parser (`src/server.ts`, `src/parser/command-parser.ts`, `src/core/command-parser.ts`)**:
+  - **Sửa dứt điểm lỗi nuốt text trong `getCodeSpanRanges`**: Xóa bỏ hoàn toàn cơ chế fallback gán `endIdx = text.length` khi thẻ `=== TASK REPORT ===` hoặc `<report>` thiếu thẻ đóng `=== END REPORT ===` / `</report>`.
+  - **Ngăn chặn triệt để vô hiệu hóa tag điều phối**: Khi người dùng hoặc agent đề cập đến tên report trong câu đàm thoại, parser không còn nuốt toàn bộ phần còn lại của tin nhắn vào code span được bảo vệ, giúp `extractDualCommands` và `stripCommandTags` quét và tách sạch 100% các lệnh `<talk>` và `<spawn>` phía sau.
+  - **Tách tin giao việc thành bubble riêng biệt**: Đảm bảo toàn bộ lệnh điều phối phát sinh từ Orchestrator được dispatch qua `deliverTalk` và lưu thành `ChatMsg` riêng (`msgType: 'talk'`), loại bỏ triệt để hiện tượng lệnh giao việc bị dính chùm vào bubble đàm thoại chính gửi User.
+
+- **Frontend Chat UI (`web/src/components/ChatPanel.tsx`, `web/src/App.tsx`)**:
+  - **Làm sạch tag điều phối ở mọi tầng (Multi-layer sanitization)**: Bổ sung bộ lọc `stripTalkTags` trực tiếp vào từng text segment trong Khối 2.5 (`hasParts` interleaved streaming), ngăn chặn hoàn toàn tag `<talk>` / `<spawn>` thô hiển thị trong bong bóng live stream.
+  - **Nâng cấp bộ lọc Regex toàn diện**: Mở rộng regex trong `stripTalkTags` để nhận diện và gọt sạch cả các biến thể command block đa dòng, self-closing tag và các thẻ unclosed còn sót lại trên giao diện.
+  - **Tương thích Sub-Orchestrator toàn diện**: Mở rộng `isOrchView` và `isAlignRight` để nhận diện tất cả Sub-Orchestrator theo `role` hoặc `type`, hỗ trợ tên động `👑 {srcAgent?.name}` trên header Card Giao Việc.
+  - **Mở khóa hiển thị `ReportCard` cho `isOpenCode`**: Bóc tách chính xác báo cáo task ngay cả khi có tiền tố `Task complete. === TASK REPORT ===` và render component `ReportCard` trực quan thay vì in text monospace thô.
+
+- **Packaging Binary SEA**:
+  - Đóng gói và phát hành thành công binary executable độc lập `release/agentforge-web-v7.0.4.exe` và `release/agentforge-web.exe` đi kèm production frontend bundle sạch (`dist/assets/index-Lvp4n13Q.js` 307.49 kB).
+
+---
+
+## v7.0.1 (2026-09-03)
+
+### Tối Ưu Hóa & Vá Dứt Điểm Hiển Thị Directives và Packaging
+- **web/src/App.tsx**:
+  - Bảo vệ 100% tin giao việc (`isDirective`, `isDirectiveMsg`): Không bao giờ bị lọc mất bởi `isInternalMsg` hoặc bị nuốt bởi logic deduplication `applyOacDedup`.
+  - Tách biệt hiển thị: Ẩn toàn bộ `ToolCallBlock` của worker trên màn hình Main Orchestrator, giữ màn hình sạch sẽ.
+- **web/src/components/ChatPanel.tsx**:
+  - Căn phải linh hoạt cho các tin nhắn giao việc và báo cáo gửi về Orchestrator.
+  - Sửa dứt điểm hàm `stripTalkTags()` bằng cơ chế unwrap regex `$1`, bảo tồn trọn vẹn nội dung payload tin nhắn.
+  - Đồng bộ tone màu Dark Slate / Deep Midnight Blue sang trọng.
+- **src/agents/acp-client.ts**:
+  - Chuyển đổi sang Zero-latency immediate streaming: Bỏ timer trễ 250ms, phát trực tiếp tức thì từng JSON event sang WebSocket broadcast cho UI lively realtime.
+- **Tài liệu hóa**:
+  - Bổ sung sơ đồ cây thư mục chi tiết vào `ARCHITECTURE.md` và `docs/ARCHITECTURE.md`.
+- **Packaging SEA Binary**:
+  - Đóng gói thành công bản phát hành nhị phân độc lập `release/agentforge-web.exe` và `release/agentforge-web-v7.0.1.exe` (105,996,800 bytes) nhúng kèm 27 static assets.
+
+---
+
+## v7.0.0 (2026-09-03)
+
+### Kiến Trúc Backend Hạt Mịn (Granular Micro-Modules) & Tách Nhóm Độc Lập
+- **src/storage/**: Tách nhỏ toàn bộ hệ thống lưu trữ phân tán theo từng domain:
+  - `types.ts`, `constants.ts`, `paths.ts`, `file-utils.ts`, `atomic-disk.ts`: Cung cấp tầng I/O an toàn ghi đĩa nguyên tử (atomic write).
+  - `message-storage.ts`, `chat-store.ts`: Lưu trữ lịch sử tin nhắn tách biệt theo `teamId`, hỗ trợ định tuyến 3 chiều (User ↔ Orchestrator ↔ Members).
+  - `queue-storage.ts`, `outbox-store.ts`, `chat-queue-store.ts`: Quản lý hàng đợi tin nhắn và cơ chế outbox retry với timeout tự phục hồi 30 giây (`OUTBOX_IN_FLIGHT_TIMEOUT_MS = 30000`).
+  - `agent-store.ts`, `logs-store.ts`, `settings-store.ts`, `state-loader.ts`, `persistence-scheduler.ts`, `team-resolver.ts`: Quản lý state agent, cấu hình hệ thống và tự động lưu nền.
+- **src/relay/**: Phân rã hệ thống relay tin nhắn thành 11 module chuyên trách:
+  - `router.ts`, `team-router.ts`: Điều hướng tin nhắn User ↔ Orchestrator ↔ Agent theo ngữ cảnh team.
+  - `outbox-engine.ts`, `outbox-dispatcher.ts`: Vòng lặp quét outbox, thực hiện retry exponential backoff và giải phóng tin nhắn `in_flight` bị kẹt.
+  - `dedup.ts`, `broadcast-bus.ts`, `report-parser.ts`, `stream-scanner.ts`, `orchestrator-queue.ts`.
+- **src/routes/** & **src/ws/**: Tách nhỏ REST routes (`system.ts`, `settings.ts`, `models.ts`, `terminal.ts`, `agents.ts`, `chat.ts`) và WebSocket service (`ws-service.ts`), tinh gọn `src/server.ts` đóng vai trò bootstrap sạch sẽ.
+
+### Trải Nghiệm Giao Diện Người Dùng (Modern High-Tech Chat UI) (FIXED ✅)
+- **web/src/components/ChatPanel.tsx**:
+  - **Bóc tách triệt để tag thô**: Tách hoàn toàn các chuỗi lệnh `<talk>`, `<spawn>`, `[SPAWN]`, `[TALK]` khỏi dòng văn bản thông thường, sử dụng cơ chế unwrap `$1` giữ lại 100% nội dung hội thoại, không còn lỗi nuốt nội dung thẻ.
+  - **Card Giao Việc (Directive Card)**: Render thành thẻ chỉ thị chuyên biệt với icon 🎯, định tuyến rõ nét `👑 Orchestrator ➔ 🤖 Target Agent` kèm Role Badge (`coder`, `tester`, `verifier`...), tiêu đề nhiệm vụ `📌 Task Title` và phần body Markdown trực quan.
+  - **Card Khởi Tạo (Spawn Card)**: Render thẻ tạo agent với icon 🚀, role badge và khung tóm tắt mô tả công việc trên nền gradient phát sáng nhẹ.
+  - **Căn phải (Right-Aligned) tin nhắn chỉ thị**: Toàn bộ bubble lệnh điều phối do Orchestrator phát tới Worker agent được chuyển lề sang bên phải (`alignItems: 'flex-end'`, `flexDirection: 'row-reverse'`), đồng bộ chuẩn mực với các tin nhắn gửi đi (outgoing), tạo tương phản sắc nét với báo cáo từ Worker ở lề trái.
+  - **Hiển thị danh tính thực tế**: Gỡ bỏ hoàn toàn nhãn "⚡ OpenCode" chung chung; tự động tra cứu và hiển thị danh tính thực tế của từng Agent (`coder-server`, `coder-relay`, `verifier-audit`...) kèm role badge hoặc `👑 Orchestrator`.
+  - **Màu sắc Dark Slate / Deep Midnight Blue**: Chuyển toàn bộ nền bubble và `ReportCard` sang tone màu công nghệ cao (`rgba(30, 41, 59, 0.75)` -> `rgba(15, 23, 42, 0.75)`), loại bỏ triệt để nền xám đục cũ.
+- **web/src/App.tsx**:
+  - **Bảo vệ toàn diện Tin Giao Việc trên Main View**: Bổ sung cờ `isDirective` và `isDirectiveMsg` vào cả bộ lọc Main (`filteredMessages`) và hàm khử trùng lặp (`applyOacDedup`), loại bỏ hoàn toàn edge cases khiến tin giao việc bị nuốt chửng bởi snapshot OpenCode stream hoặc bị cờ `isInternalMsg` ẩn nhầm.
+  - **Tách bạch ToolCall Worker khỏi Main**: Chỉ hiển thị `ToolCallBlock` khi đang xem tab chi tiết của Agent (`showToolBlocks = !!selectedAgentId`), giữ cho màn hình Main Orchestrator luôn tinh gọn, sạch sẽ.
+
+---
+
+## v6.32.1 (2026-09-03)
+
+### Chống Sinh Phantom Orchestrator & Cách Ly Team Tuyệt Đối (Strict Isolation) (FIXED ✅)
+- **src/server.ts**: Khi xảy ra lỗi `TALK_AGENT_NOT_FOUND`, hệ thống tự động sinh tin nhắn lỗi trực tiếp về `fromAgent` (với `msgType: 'error'`, lưu database và broadcast qua WebSocket), giúp agent nguồn nhận biết target sai ngay trên khung chat của mình thay vì chuyển tiếp âm thầm.
+- **src/server.ts**: Chuẩn hóa hàm `findExistingOrchestrator(teamId)` — khi có `teamId` truyền vào, chỉ tìm kiếm duy nhất trong team đó và trả về `undefined` nếu không tìm thấy; tuyệt đối không tự ý fallback sang defaultOrch hoặc Orchestrator của team khác, ngăn chặn triệt để nguy cơ rò rỉ dữ liệu (data leak) giữa các team.
+- **src/server.ts**: Loại bỏ triệt để việc tự động gán `agents.set(orchId, ...)` sinh instance ma `Orchestrator-${orchId.slice(-4)}` trong `processOrchestratorTriggerQueue`, `getOrchClient` và `dispatchUserChat`. Tái sử dụng Orchestrator hiện có của hệ thống/team, chấm dứt hoàn toàn hiện tượng sinh thêm Main 2 khi chat với Main 1.
+
+## v6.32.0 (2026-09-03)
+
+### Kiến trúc Đa Team & Tách biệt Hoạt động Độc lập (FIXED ✅)
+- **src/server.ts**: Chuyển đổi hàng đợi tin nhắn chưa đọc `unreadForOrchestrator` từ mảng toàn cục sang `Map<string, ChatMsg[]>` tách biệt theo từng `orchId`/`teamId`.
+- **src/server.ts**: Cập nhật hàm `forwardToOrchestrator` nhận `targetOrchId` và `teamId`, đảm bảo các thông báo hệ thống và lỗi runtime của agent được định tuyến chính xác về Orchestrator chỉ huy mà không rò rỉ chéo team.
+- **src/server.ts**: Gán `teamId` trực tiếp cho mọi `userMsg` trong route `/api/chat`.
+- **web/src/components/ChatPanel.tsx**: Chuẩn hóa nhận diện Orchestrator cho toàn bộ Sub-Orchestrators (màu sắc `#a5b4fc`, badge 'main', icon vương miện 👑, và thẻ Task Card khi giao nhiệm vụ).
+
+### Bảo toàn Khối Suy luận (Thinking Parts) và Chống Nuốt Tin UI (FIXED ✅)
+- **src/server.ts** (L1121 & L5186): Bổ sung `p.type === 'thinking'` vào bộ lọc parts của snapshot opencode và endpoint API history (`p.type === 'tool' || p.type === 'text' || p.type === 'thinking'`), giữ trọn vẹn suy luận reasoning của model sau khi restart/reconnect.
+- **web/src/App.tsx**: Tinh chỉnh bộ lọc tin nhắn `filteredMessages`:
+  - Giữ lại 100% tin nhắn User gửi vào Main / Sub-Orchestrator.
+  - Khôi phục hiển thị các thẻ giao việc (`talk`/`spawn`) và báo cáo kết quả của Worker gửi về Orchestrator trên UI.
+  - Tối ưu hóa hàm `applyOacDedup` khử trùng lặp theo `id` và content/timestamp key, loại bỏ triệt để hiện tượng tin nhắn lặp lại nhiều lần.
+
+### Quản lý Vòng đời Tiến trình: Inlet Pipe & Chống Orphan Process (FIXED ✅)
+- **src/agents/acp-client.ts**: Cấu hình `stdio: ['pipe', 'pipe', 'pipe']` khi spawn tiến trình con PowerShell/OpenCode. Khi Node.js tắt đột ngột, inlet pipe stdin bị đứt kết nối, tiến trình con tự động nhận tín hiệu và kết thúc sạch sẽ.
+- Tích hợp theo dõi `ACPClient.activeChildPids` và kích hoạt `taskkill /pid ${pid} /T /F` (Windows) / `SIGKILL` (Linux) dọn dẹp triệt để cây tiến trình con trên hệ thống khi có tín hiệu exit/SIGINT/SIGTERM.
+
+---
+
 ## v6.31.3 (2026-09-02)
 
 ### Option A — thinking hiển thị xen kẽ trong parts (thứ tự realtime) (FIXED ✅)

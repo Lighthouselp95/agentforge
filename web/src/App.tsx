@@ -420,7 +420,9 @@ export function App() {
                 toolCalls: m.toolCalls,
                 thinking: m.thinking || staleThinking,
                 parts: m.parts,
-                teamId: m.teamId
+                teamId: m.teamId,
+                task: (m as any).task,
+                showOnUI: (m as any).showOnUI
               };
               return next;
             }
@@ -437,7 +439,9 @@ export function App() {
             toolCalls: m.toolCalls,
             thinking: m.thinking || staleThinking,
             parts: m.parts,
-            teamId: m.teamId
+            teamId: m.teamId,
+            task: (m as any).task,
+            showOnUI: (m as any).showOnUI
           }];
           return nextList.length > MAX_DISPLAY_MESSAGES ? nextList.slice(-MAX_DISPLAY_MESSAGES) : nextList;
         });
@@ -813,12 +817,14 @@ export function App() {
     // Only hide true internal planning messages from the main chat view.
     // Final summaries/reports from the orchestrator should remain visible.
     if (m.msgType === 'orchestrator_internal') return true;
-    // Chỉ ẩn các chỉ thị NỘI BỘ do orchestrator gửi ĐI cho agent (ví dụ [TALK agent]).
-    // NGỌAI LỆ: msgType 'talk' (spawn/talk giao task do server tạo) KHÔNG bị ẩn —
-    // user yêu cầu hiển thị lệnh giao task của Orchestrator thành cục riêng trên khung main.
-    // Tin agent báo cáo VỀ orchestrator (from=agent, to='orchestrator') PHẢI được hiển thị ở main view
-    // để người dùng thấy agent phản hồi lại main.
-    if (m.from === 'orchestrator' && m.msgType !== 'talk' && m.to && m.to !== 'user' && m.to !== 'broadcast') return true;
+
+    // Nếu là tin nhắn giao việc (Directive, Talk, Spawn), TUYỆT ĐỐI KHÔNG ẨN:
+    const content = String(m.content || '');
+    const isDirective = m.msgType === 'talk' || /(?:\[(?:TALK|SPAWN|TASK)\]|<\s*(?:talk|spawn)\b)/i.test(content);
+    if (isDirective) return false;
+
+    // Chỉ ẩn các chỉ thị NỘI BỘ thuần túy do orchestrator gửi ĐI cho agent mà không phải directive giao việc
+    if (m.from === 'orchestrator' && m.to && m.to !== 'user' && m.to !== 'broadcast') return true;
     // Tin hệ thống NỘI BỘ hướng tới orchestrator (forwardToOrchestrator: to='orchestrator', msgType='internal')
     // → không hiển thị trong main chat. Tin system hướng tới user (to:'user', msgType:'error') vẫn hiện.
     if (m.from === 'system' && m.to === 'orchestrator') return true;
@@ -826,11 +832,7 @@ export function App() {
   };
 
   // Fix interleave 6.44: dedup canonical reply khi snapshot opencode đã có text parts (interleave đầy đủ)
-  // Fix UI-dup 6.31.1: mở rộng điều kiện drop — nếu có snapshot opencode (msgType='opencode') cho cùng `from`
-  // với parts NON-EMPTY (text/tool), thì DROP talk reply không-opencode cùng `from` (snapshot làm canonical,
-  // đã render đầy đủ text+tool+thinking qua parts). Chạy 2 pass (pre-scan + filter) để dedup hoạt động
-  // KHÔNG phụ thuộc thứ tự snapshot/reply trong mảng. An toàn: chỉ drop theo key `from` trùng snapshot,
-  // không đụng tin user / agent khác.
+  // Fix UI-dup: loại bỏ duplicate theo id và duplicate theo nội dung / timestamp
   const applyOacDedup = (list: typeof allMessages) => {
     const stripTypePrefix = (s: string) => {
       if (/^[A-Z_]+:\s/u.test(s) && !/^✖|^◆/u.test(s)) return s.replace(/^[A-Z_]+:\s?/u, '');
@@ -852,17 +854,37 @@ export function App() {
         }
       }
     }
-    // Pass 2 — filter: giữ snapshot opencode, drop talk reply không-opencode trùng `from` snapshot.
+    // Pass 2 — filter: giữ snapshot opencode, drop talk reply không-opencode trùng `from` snapshot,
+    // đồng thời loại trừ trùng lặp m.id hoặc nội dung trùng liên tiếp.
+    const seenIds = new Set<string>();
+    const seenContentKeys = new Set<string>();
     const out: typeof list = [];
     for (const m of list) {
+      if (m.id) {
+        if (seenIds.has(m.id)) continue;
+        seenIds.add(m.id);
+      }
       const fkey = m.from || '';
-      if (m.msgType !== 'opencode' && m.content && String(m.content).trim().length > 0) {
+      const trimmedContent = (m.content || '').trim();
+      const isDirectiveMsg = m.msgType === 'talk' || (m.to && m.to !== 'user' && m.to !== 'broadcast') || /(?:\[(?:TALK|SPAWN|TASK)\]|<\s*(?:talk|spawn)\b)/i.test(trimmedContent);
+      if (m.msgType !== 'opencode' && trimmedContent.length > 0 && !isDirectiveMsg) {
         const fullText = oacFullText.get(fkey);
         const hasParts = oacHasParts.get(fkey) === true;
-        if ((fullText !== undefined && String(m.content).trim() === fullText) || hasParts) {
+        if ((fullText !== undefined && trimmedContent === fullText) || (hasParts && m.from !== 'orchestrator' && m.agentRole !== 'orchestrator')) {
           // drop redundant canonical reply — interleaved parts của snapshot đã đủ text+tool+thinking
           continue;
         }
+      }
+      // Tránh lặp tin nhắn giống hệt nhau cùng người gửi trong cùng timestamp / gần nhau (hoặc trong cửa sổ ngắn 4s)
+      if (trimmedContent && m.from) {
+        // Chuẩn hóa content whitespace và cắt nhỏ 200 ký tự đầu
+        const normContent = trimmedContent.replace(/\s+/g, ' ').slice(0, 200);
+        // Với orchestrator->user: dedup trong cửa sổ 5s bất kể timestamp hơi lệch do REST/WS emit
+        const isOrchToUser = (m.from === 'orchestrator' || m.agentRole === 'orchestrator') && (m.to === 'user' || !m.to);
+        const timeBucket = isOrchToUser ? Math.floor((m.timestamp || 0) / 5000) : (m.timestamp || '');
+        const contentKey = `${m.from}|${m.to || ''}|${m.msgType || ''}|${normContent}|${timeBucket}`;
+        if (seenContentKeys.has(contentKey)) continue;
+        seenContentKeys.add(contentKey);
       }
       out.push(m);
     }
@@ -876,21 +898,35 @@ export function App() {
         const base = allMessages.filter(m => {
           if (isSystemMsg(m)) return false;
           if (isSubOrch) {
+            if (isInternalMsg(m)) return false;
+            const orchTeamId = sel?.teamId || (sel?.id === 'orchestrator' ? 'default' : `team-${sel?.id.slice(-8)}`);
+            if (m.teamId && m.teamId !== orchTeamId) return false;
+
+            const isWorkerOpen = (m.msgType === 'opencode') && (m.from !== 'user') && (m.from !== selectedAgentId) && (m.agentRole !== 'orchestrator');
+            if (isWorkerOpen) return false;
+
             if (m.msgType === 'opencode') {
-              // Live stream từ stdio: chỉ hiển thị snapshot của CHÍNH agent đang xem (from === selectedAgentId),
-              // tránh thinking/tool của agent khác hiện lẫn vào view. Ẩn event tool-only.
+              // Live stream từ stdio: chỉ hiển thị snapshot của CHÍNH orchestrator đang xem
               return m.from === selectedAgentId && !!(m.content || m.thinking || (m.toolCalls && m.toolCalls.length > 0) || (m.parts && m.parts.length > 0));
             }
-            if (m.from === selectedAgentId && m.to && m.to !== 'user' && m.to !== 'broadcast') return false;
             const isFromWorker = m.from !== 'user' && m.from !== selectedAgentId && m.agentRole !== 'orchestrator' && m.from !== 'system' && m.from !== 'error';
             if (isFromWorker) {
-              return false; // Ẩn hoàn toàn báo cáo của worker trên màn hình Orchestrator
+              // Giữ lại báo cáo / trao đổi từ worker gửi về Orchestrator hoặc broadcast
+              const isToOrch = m.to === selectedAgentId || m.to === 'orchestrator' || m.to === 'broadcast' || !m.to;
+              const isReportOrTask = m.msgType === 'talk' || /(?:REPORT|HOÀN THÀNH|KẾT QUẢ|TIẾN ĐỘ|TASK|ERROR)/i.test(m.content || '');
+              if (!isToOrch && !isReportOrTask) {
+                return false;
+              }
             }
             return (
-              (m.from === 'user' && m.to === selectedAgentId) ||
-              (m.from === selectedAgentId && (m.to === 'user' || m.to === 'broadcast' || !m.to)) ||
-              (m.msgType === 'error' && (m.from === selectedAgentId || m.to === selectedAgentId)) ||
-              (m.from === 'error' && m.to === selectedAgentId)
+              (m.from === 'user' && (m.to === selectedAgentId || m.to === 'orchestrator' || m.to === 'broadcast' || !m.to)) ||
+              ((m.from === selectedAgentId || m.from === 'orchestrator' || m.agentRole === 'orchestrator') && (m.to === 'user' || m.to === 'broadcast' || !m.to)) ||
+              // Lệnh giao task (spawn/talk) của Orchestrator → agent: HIỂN THỊ thành cục riêng
+              ((m.from === selectedAgentId || m.from === 'orchestrator' || m.agentRole === 'orchestrator') &&
+               (m.msgType === 'talk' || (typeof m.content === 'string' && /(?:\[(?:TALK|SPAWN|TASK)\]|<\s*(?:talk|spawn)\b)/i.test(m.content)) || (m.to && m.to !== 'user' && m.to !== 'broadcast'))) ||
+              (isFromWorker && (m.to === selectedAgentId || m.to === 'orchestrator' || m.to === 'broadcast' || !m.to)) ||
+              (m.msgType === 'error' && (m.to === 'user' || m.from === selectedAgentId || m.to === selectedAgentId || m.from === 'orchestrator')) ||
+              (m.from === 'error' && (m.to === 'user' || m.to === selectedAgentId || m.to === 'orchestrator'))
             );
           }
           if (m.msgType === 'opencode') {
@@ -905,10 +941,6 @@ export function App() {
             (m.from === 'error' && m.to === selectedAgentId)
           );
         });
-        // Fix interleave 6.44 (rework 6.33): GIỮ text+tool trong parts snapshot opencode để render xen kẽ.
-        // Dedup canonical reply trùng nội dung: xử lý bởi applyOacDedup ở outer level — không cần inline.
-        // Bỏ toàn bộ cơ chế gộp/splice client 6.33 (trước đây gộp snapshot + reply thành 1 bubble).
-        // Server giờ giữ text+tool trong parts; applyOacDedup lọc reply trùng nội dung.
         return base;
       })()
     : allMessages.filter(m => {
@@ -932,14 +964,27 @@ export function App() {
         }
         const isFromWorker = m.from !== 'user' && m.from !== orchId && m.agentRole !== 'orchestrator' && m.from !== 'system' && m.from !== 'error';
         if (isFromWorker) {
-          // ẨN 100% tin nhắn và báo cáo của worker trên màn hình chat Main
-          return false;
+          // Giữ lại báo cáo / phản hồi từ worker gửi về Main Orchestrator hoặc broadcast
+          const isToOrch = m.to === orchId || m.to === 'orchestrator' || m.to === 'broadcast' || !m.to;
+          const isReportOrTask = m.msgType === 'talk' || /(?:REPORT|HOÀN THÀNH|KẾT QUẢ|TIẾN ĐỘ|TASK|ERROR)/i.test(m.content || '');
+          if (!isToOrch && !isReportOrTask) {
+            return false;
+          }
         }
+        const isDirective = (
+          (m.from === orchId || m.from === 'orchestrator' || m.agentRole === 'orchestrator') &&
+          (
+            m.msgType === 'talk' ||
+            (typeof m.content === 'string' && /(?:\[(?:TALK|SPAWN|TASK)\]|<\s*(?:talk|spawn)\b)/i.test(m.content)) ||
+            (m.to && m.to !== 'user' && m.to !== 'orchestrator' && m.to !== 'broadcast')
+          )
+        );
+
         return (
-          (m.from === 'user' && (m.to === orchId || m.to === 'orchestrator' || !m.to)) ||
+          isDirective ||
+          (m.from === 'user' && (m.to === orchId || m.to === 'orchestrator' || m.to === 'broadcast' || !m.to)) ||
           ((m.from === orchId || m.from === 'orchestrator' || m.agentRole === 'orchestrator') && (m.to === 'user' || m.to === 'broadcast' || !m.to)) ||
-          // Lệnh giao task (spawn/talk) của Orchestrator → agent: HIỂN THỊ thành cục riêng trên main
-          ((m.from === orchId || m.from === 'orchestrator' || m.agentRole === 'orchestrator') && m.msgType === 'talk' && m.to && m.to !== 'user' && m.to !== 'broadcast') ||
+          (isFromWorker && (m.to === orchId || m.to === 'orchestrator' || m.to === 'broadcast' || !m.to)) ||
           (m.msgType === 'error' && (m.to === 'user' || m.from === orchId || m.from === 'orchestrator')) ||
           (m.from === 'error' && (m.to === 'user' || m.to === orchId || m.to === 'orchestrator'))
         );
@@ -1432,6 +1477,7 @@ export function App() {
                 onStop={stopAgent}
                 onClear={clearChat}
                 loading={loading}
+                selectedAgentId={selectedAgentId}
                 title={selectedAgentId ? (() => {
                   const a = agents.find(x => x.id === selectedAgentId);
                   return a ? `${a.name} (${a.id})${a.sessionTitle ? ` — ${a.sessionTitle}` : ''}` : 'Agent';
@@ -1450,7 +1496,7 @@ export function App() {
                 connStatus={connectionStatus}
                 offlineForText={offlineForText}
                 uptimeText={uptimeText}
-                showToolBlocks={true}
+                showToolBlocks={!!selectedAgentId && !agents.some(a => a.id === selectedAgentId && (a.role === 'orchestrator' || a.type === 'orchestrator'))}
                 queuedMessages={currentQueue}
                 onFlushQueue={() => flushQueueForAgent(activeTargetId)}
                 onClearQueue={() => clearQueueForAgent(activeTargetId)}
