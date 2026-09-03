@@ -1,0 +1,14 @@
+{
+  "name": "jwt-auth-api",
+  "version": "1.0.0",
+  "description": "Ultra-lightweight, zero-dependency, high-performance JWT Authentication API",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/auth.test.js"
+  },
+  "keywords": ["jwt", "authentication", "zero-dependency", "lightweight", "auth-api"],
+  "author": "AgentForge",
+  "license": "MIT"
+}

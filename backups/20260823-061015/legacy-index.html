@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AgentForge — Multi-Agent Orchestrator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0a0a;--bg-panel:#0d0d0d;--bg-elev:#111;--bg-card:#1d1d1d;--bg-input:#1a1a1a;--bg-hover:#333;
+  --border:#2a2a2a;--border-light:#333;--border-soft:#222;
+  --text:#e0e0e0;--text-strong:#f0f0f0;--text-dim:#8b98a5;--text-muted:#666;
+  --accent:#2563eb;--accent-2:#7c3aed;--green:#16a34a;--red:#dc2626;--amber:#facc15;
+}
+html.light{
+  --bg:#f5f6fa;--bg-panel:#fff;--bg-elev:#f0f1f5;--bg-card:#fff;--bg-input:#f0f1f5;--bg-hover:#e6e8ee;
+  --border:#d4d7de;--border-light:#d4d7de;--border-soft:#e6e8ee;
+  --text:#374151;--text-strong:#1f2937;--text-dim:#6b7280;--text-muted:#9ca3af;
+  --accent:#2563eb;--accent-2:#7c3aed;--green:#16a34a;--red:#dc2626;--amber:#b7860b;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter','Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;letter-spacing:-.01em}
+.header{background:var(--bg-elev);border-bottom:1px solid var(--border-soft);padding:10px 20px;display:flex;justify-content:space-between;align-items:center}
+.header h1{font-size:16px;font-weight:600}
+.header .status{font-size:12px;color:#4ade80}
+.main{display:flex;flex:1;overflow:hidden}
+
+/* Left Panel — Orchestrator Chat */
+.left-panel{width:400px;border-right:1px solid var(--border-soft);display:flex;flex-direction:column;background:var(--bg-panel)}
+.panel-header{padding:12px 16px;border-bottom:1px solid var(--border-soft);font-weight:600;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+.chat-area{flex:1;overflow:auto;padding:12px}
+.msg{margin-bottom:10px}
+.msg-user{text-align:right}
+.msg-label{font-size:10px;color:var(--text-muted);margin-bottom:2px}
+.msg-content{display:inline-block;padding:8px 12px;border-radius:10px;max-width:85%;font-size:12px;line-height:1.5;white-space:pre-wrap;text-align:left}
+.msg-user .msg-content{background:var(--accent);color:white}
+.msg-assistant .msg-content{background:var(--bg-input);border:1px solid var(--border)}
+.msg-system .msg-content{background:#1a2e1a;border:1px solid #2a4a2a;color:#4ade80}
+.msg-agent .msg-content{background:var(--bg-card);border:1px solid var(--border);color:#60a5fa}
+.thinking{color:var(--text-dim);font-size:11px;padding:8px;display:none}
+.input-bar{padding:10px;border-top:1px solid var(--border-soft);display:flex;gap:6px}
+.input-bar textarea{flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;resize:none;min-height:36px;font-family:inherit}
+.input-bar button{background:var(--accent);color:white;border:none;border-radius:6px;padding:8px 14px;font-size:12px;cursor:pointer;font-weight:600}
+.input-bar button:disabled{background:var(--bg-hover);cursor:not-allowed}
+
+/* Center Panel — Kanban */
+.center-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.kanban{display:flex;gap:10px;padding:10px;flex:1;overflow-x:auto;background:var(--bg)}
+.kanban-col{min-width:230px;max-width:270px;flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;display:flex;flex-direction:column;overflow:hidden}
+.kanban-col-header{padding:12px 14px;font-weight:600;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);background:var(--bg-elev);letter-spacing:.3px}
+.kanban-col-header span.badge{background:var(--bg-input);padding:2px 9px;border-radius:10px;font-size:12px;color:var(--text-dim);font-weight:700}
+.kanban-col:nth-child(1) .kanban-col-header{color:#9ca3af}
+.kanban-col:nth-child(2) .kanban-col-header{color:var(--amber)}
+.kanban-col:nth-child(3) .kanban-col-header{color:#f87171}
+.kanban-col:nth-child(4) .kanban-col-header{color:#6b7280}
+.kanban-col-body{flex:1;overflow:auto;padding:8px}
+.agent-card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;cursor:pointer;transition:border-color .18s,transform .18s,box-shadow .18s;position:relative}
+.agent-card:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.25)}
+.agent-card:hover::after{content:"";position:absolute;top:0;left:0;right:0;height:2px;border-radius:10px 10px 0 0;background:var(--accent)}
+.agent-card .name{font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px;color:var(--text-strong)}
+.agent-card .role{font-size:11px;color:var(--text-strong);margin-top:3px;background:var(--bg-input);display:inline-block;padding:1px 7px;border-radius:8px;border:1px solid var(--border)}
+.agent-card .meta{font-size:11px;color:var(--text);margin-top:6px;display:flex;justify-content:space-between;align-items:center}
+.agent-card .task{font-size:11px;color:var(--text);margin-top:4px;line-height:1.4;max-height:40px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.agent-card .status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:0}
+.status-idle{background:#9ca3af}
+.status-working{background:var(--amber);box-shadow:0 0 0 3px rgba(250,204,21,.15);animation:pulse 1s infinite}
+.status-error{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.15)}
+.status-stopped{background:#4b5563}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* Right Panel — Agent Detail / Chat */
+.resizer{width:5px;background:var(--border);cursor:col-resize;flex-shrink:0}.resizer:hover{background:var(--accent)}
+.right-panel{width:350px;border-left:1px solid var(--border-soft);display:flex;flex-direction:column;background:var(--bg-panel)}
+.agent-detail{flex:1;display:flex;flex-direction:column}
+.agent-detail-header{padding:12px 16px;border-bottom:1px solid var(--border-soft)}
+.agent-detail-header h3{font-size:14px;font-weight:600}
+.agent-detail-header .role-badge{font-size:10px;background:var(--bg-input);padding:2px 8px;border-radius:4px;margin-left:8px}
+.session-chip{display:inline-flex;align-items:center;justify-content:flex-start;gap:6px;margin:10px 0 0;padding:6px 14px 6px 0;border-radius:10px;background:var(--bg);border:1px solid var(--border-soft);border-left:none;font-size:13px;font-weight:700;color:var(--text-strong);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.92;text-align:left}
+.agent-chat{flex:1;overflow:auto;padding:12px}
+.agent-input{padding:10px;border-top:1px solid var(--border-soft);display:flex;gap:6px}
+.agent-input textarea{flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;resize:none;min-height:36px;font-family:inherit}
+.agent-input button{background:var(--accent-2);color:white;border:none;border-radius:6px;padding:8px 14px;font-size:12px;cursor:pointer;font-weight:600}
+
+/* Buttons */
+.btn{border:none;border-radius:4px;padding:4px 8px;font-size:11px;cursor:pointer;font-weight:600}
+.btn-sm{padding:3px 6px;font-size:10px}
+.btn-primary{background:var(--accent);color:white}
+.btn-success{background:var(--green);color:white}
+.btn-danger{background:var(--red);color:white}
+.btn-ghost{background:transparent;color:var(--text-dim);border:1px solid var(--border)}
+html.light .btn-ghost{background:var(--bg-input);color:var(--text-dim)}
+html.light .btn-ghost:hover{background:var(--bg-hover)}
+.btn-theme{background:var(--bg-input);color:var(--text);border:1px solid var(--border);font-size:14px;width:30px;height:30px;line-height:1;padding:0;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+
+/* Modal */
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);display:none;justify-content:center;align-items:center;z-index:1000}
+.modal-overlay.show{display:flex}
+.modal{background:var(--bg-elev);border-radius:10px;padding:20px;width:420px;border:1px solid var(--border)}
+.modal h3{margin-bottom:14px;font-size:15px}
+.form-group{margin-bottom:10px}
+.form-group label{font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px}
+.form-group input,.form-group select,.form-group textarea{width:100%;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:7px 10px;font-size:12px;font-family:inherit}
+.form-group textarea{min-height:60px;resize:vertical}
+.type-btns{display:flex;gap:6px}
+.type-btn{flex:1;padding:6px;border-radius:5px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--bg-input);color:var(--text-dim);text-align:center}
+.type-btn.active{background:var(--accent);color:white;border-color:var(--accent)}
+.modal-btns{display:flex;gap:6px;justify-content:flex-end;margin-top:14px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🤖 AgentForge</h1>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button class="btn btn-primary" onclick="showModal('spawn')">+ Spawn Agent</button>
+    <button class="btn btn-ghost" onclick="showModal('settings')">⚙ Settings</button>
+    <button class="btn-theme" id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</button>
+    <span class="status">● Connected</span>
+  </div>
+</div>
+
+<div class="main">
+  <!-- LEFT: Orchestrator Chat -->
+  <div class="left-panel">
+    <div class="panel-header">
+      <span>🧠 Orchestrator</span>
+      <span style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn-ghost btn-sm" onclick="clearMainChat()" title="Clear conversation + opencode session">🗑 Clear</button>
+        <span style="font-size:10px;color:#666">Main Agent</span>
+      </span>
+    </div>
+    <div class="chat-area" id="orch-chat"></div>
+    <div class="thinking" id="orch-thinking">🤔 Orchestrator thinking...</div>
+    <div class="input-bar">
+      <textarea id="orch-input" placeholder="Tell orchestrator what to do..." rows="1"></textarea>
+      <button onclick="sendOrchChat()">Send</button>
+      <button id="orch-stop" class="btn btn-danger" onclick="stopChat(\x27orchestrator\x27)" style="display:none">⏹</button>
+    </div>
+  </div>
+
+  <!-- CENTER: Kanban -->
+  <div class="resizer" id="resizer-left"></div><div class="center-panel">
+    <div class="panel-header">
+      <span>📋 Agent Board</span>
+      <span id="agent-count" style="font-size:10px;color:#666">0 agents</span>
+    </div>
+    <div class="kanban" id="kanban">
+      <div class="kanban-col">
+        <div class="kanban-col-header">🟢 Idle <span class="badge" id="count-idle">0</span></div>
+        <div class="kanban-col-body" id="col-idle"></div>
+      </div>
+      <div class="kanban-col">
+        <div class="kanban-col-header">🟡 Working <span class="badge" id="count-working">0</span></div>
+        <div class="kanban-col-body" id="col-working"></div>
+      </div>
+      <div class="kanban-col">
+        <div class="kanban-col-header">🔴 Error <span class="badge" id="count-error">0</span></div>
+        <div class="kanban-col-body" id="col-error"></div>
+      </div>
+      <div class="kanban-col">
+        <div class="kanban-col-header">⚫ Stopped <span class="badge" id="count-stopped">0</span></div>
+        <div class="kanban-col-body" id="col-stopped"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Agent Chat -->
+  <div class="resizer" id="resizer-right"></div><div class="right-panel">
+    <div id="agent-detail-empty" style="flex:1;display:flex;align-items:center;justify-content:center;color:#555;font-size:13px">
+      Click an agent to chat with it
+    </div>
+    <div id="agent-detail" class="agent-detail" style="display:none">
+      <div class="agent-detail-header">
+        <h3 id="ad-name">Agent Name <span class="role-badge" id="ad-role">role</span></h3>
+        <div id="ad-session-title"></div>
+        <div style="margin-top:6px;display:flex;gap:4px">
+          <button class="btn btn-success btn-sm" id="ad-start" onclick="startSelected()">Start</button>
+          <button class="btn btn-danger btn-sm" id="ad-stop" onclick="stopSelected()">Stop</button>
+          <button class="btn btn-ghost btn-sm" onclick="deleteSelected()">Delete</button>
+        </div>
+      </div>
+      <div class="agent-chat" id="agent-chat"></div>
+      <div class="agent-input">
+        <textarea id="agent-input" placeholder="Chat with this agent..." rows="1"></textarea>
+        <button onclick="sendAgentChat()">Send</button>
+        <button id="agent-stop" class="btn btn-danger" onclick="stopChat(\x27agent\x27)" style="display:none">⏹</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Spawn Modal -->
+<div class="modal-overlay" id="modal-spawn">
+  <div class="modal">
+    <h3>Spawn New Agent</h3>
+    <div class="form-group">
+      <label>Agent Name</label>
+      <input id="sp-name" placeholder="e.g., code-worker-1">
+    </div>
+    <div class="form-group">
+      <label>Role</label>
+      <select id="sp-role">
+        <option value="coder">🔨 Coder — Write code, implement features</option>
+        <option value="reviewer">🔍 Reviewer — Review code quality</option>
+        <option value="tester">🧪 Tester — Write and run tests</option>
+        <option value="docs">📝 Docs — Write documentation</option>
+        <option value="planner">📋 Planner — Analyze and plan</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Project Directory</label>
+      <input id="sp-dir" value="C:/Users/Hai Dang">
+    </div>
+    <div class="form-group">
+      <label>Model (mặc định = opencode)</label>
+      <select id="sp-model"><option value="">— Default</option></select>
+    </div>
+    <div class="modal-btns">
+      <button class="btn btn-ghost" onclick="hideModal('spawn')">Cancel</button>
+      <button class="btn btn-primary" onclick="doSpawn()">Spawn Agent</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="modal-settings">
+  <div class="modal">
+    <h3>Provider Settings</h3>
+    <div class="form-group">
+      <label>OpenCode working directory</label>
+      <input id="set-dir" value="C:/Users/Hai Dang">
+    </div>
+    <div class="form-group">
+      <label>Main Agent Model (mặc định = opencode)</label>
+      <select id="set-model"><option value="">— Default</option></select>
+    </div>
+    <div class="form-group">
+      <label>Orchestrator System Prompt (editable)</label>
+      <textarea id="set-prompt" rows="6">You are the Main Orchestrator of AgentForge. Manage your team of specialized agents to complete coding tasks.</textarea>
+    </div>
+    <div class="modal-btns">
+      <button class="btn btn-ghost" onclick="hideModal('settings')">Close</button>
+      <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let agents = [];
+let selectedAgentId = null;
+let agentChats = {}; // agentId -> messages[]
+
+// ========== MODAL ==========
+function toggleTheme() {
+  const html = document.documentElement;
+  const isLight = html.classList.toggle('light');
+  localStorage.setItem('agentforge-theme', isLight ? 'light' : 'dark');
+  document.getElementById('theme-toggle').textContent = isLight ? '☀️' : '🌙';
+}
+function applyTheme() {
+  const saved = localStorage.getItem('agentforge-theme');
+  const light = saved === 'light';
+  document.documentElement.classList.toggle('light', light);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = light ? '☀️' : '🌙';
+}
+applyTheme();
+
+function showModal(id) {
+  if (id === 'spawn' || id === 'settings') loadModels(id);
+  document.getElementById('modal-'+id).classList.add('show');
+}
+
+// Tải danh sách model từ opencode vào dropdown
+let modelsLoaded = false;
+async function loadModels(modalId) {
+  const sel = document.getElementById(modalId === 'spawn' ? 'sp-model' : 'set-model');
+  if (!sel || sel.dataset.loaded) return;
+  sel.dataset.loaded = '1';
+  try {
+    const res = await fetch(API+'/api/models');
+    const data = await res.json();
+    if (data.error) return;
+    const current = sel.value;
+    data.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      sel.appendChild(opt);
+    });
+    sel.value = current;
+  } catch (e) {}
+}
+function hideModal(id) { document.getElementById('modal-'+id).classList.remove('show'); }
+
+// ========== SPAWN ==========
+async function doSpawn() {
+  const name = document.getElementById('sp-name').value.trim();
+  const role = document.getElementById('sp-role').value;
+  const dir = document.getElementById('sp-dir').value.trim();
+  const model = document.getElementById('sp-model').value.trim();
+  if (!name) return alert('Enter a name!');
+  const res = await fetch(API+'/api/agents', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, role, type: 'worker', projectDir: dir || undefined, model: model || undefined })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    hideModal('spawn');
+    document.getElementById('sp-name').value = '';
+    document.getElementById('sp-model').value = '';
+    fetchAgents();
+    addOrchMsg('system', `✅ Spawned agent "${name}" with role "${role}"`);
+  }
+}
+
+// ========== AGENTS ==========
+async function fetchAgents() {
+  const res = await fetch(API+'/api/agents');
+  agents = await res.json();
+  renderKanban();
+}
+
+function renderKanban() {
+  const cols = { idle: [], working: [], error: [], stopped: [] };
+  agents.forEach(a => {
+    const s = a.status || 'stopped';
+    if (cols[s]) cols[s].push(a); else cols.stopped.push(a);
+  });
+  for (const [status, list] of Object.entries(cols)) {
+    document.getElementById('col-'+status).innerHTML = list.map(a => `
+      <div class="agent-card" onclick="selectAgent('${a.id}')" style="${selectedAgentId===a.id?'border-color:#2563eb':''}">
+        <div class="name"><span class="status-dot status-${a.status||'stopped'}"></span>${a.name}</div>
+        <div class="role">${a.role}</div>
+        ${a.task ? `<div class="task">📌 ${a.task}</div>` : ''}
+        <div class="meta">
+          <span>${a.sessionId ? '🔗' : ''}</span>
+          <span>${a.sessionTitle ? '💬' : ''} ${a.type}</span>
+        </div>
+      </div>
+    `).join('') || '<div style="color:#555;font-size:11px;text-align:center;padding:20px 8px">Empty</div>';
+    document.getElementById('count-'+status).textContent = list.length;
+  }
+  document.getElementById('agent-count').textContent = agents.length + ' agents';
+}
+
+// ========== SELECT AGENT ==========
+function selectAgent(id) {
+  selectedAgentId = id;
+  const agent = agents.find(a => a.id === id);
+  if (!agent) return;
+  document.getElementById('agent-detail-empty').style.display = 'none';
+  document.getElementById('agent-detail').style.display = 'flex';
+  document.getElementById('ad-name').innerHTML = agent.name + ' <span class="role-badge">' + agent.role + '</span>';
+  document.getElementById('ad-session-title').innerHTML = agent.sessionTitle ? `<div class="session-chip">💬 ${agent.sessionTitle}</div>` : '';
+  document.getElementById('ad-start').style.display = agent.status === 'stopped' ? '' : 'none';
+  document.getElementById('ad-stop').style.display = agent.status !== 'stopped' ? '' : 'none';
+  renderAgentChat();
+  renderKanban();
+}
+
+async function startSelected() {
+  if (!selectedAgentId) return;
+  await fetch(API+'/api/agents/'+selectedAgentId+'/start', {method:'POST'});
+  fetchAgents();
+}
+async function stopSelected() {
+  if (!selectedAgentId) return;
+  await fetch(API+'/api/agents/'+selectedAgentId+'/stop', {method:'POST'});
+  fetchAgents();
+}
+async function deleteSelected() {
+  if (!selectedAgentId) return;
+  await fetch(API+'/api/agents/'+selectedAgentId, {method:'DELETE'});
+  selectedAgentId = null;
+  document.getElementById('agent-detail-empty').style.display = 'flex';
+  document.getElementById('agent-detail').style.display = 'none';
+  fetchAgents();
+}
+
+// ========== ORCHESTRATOR CHAT ==========
+async function sendOrchChat() {
+  const input = document.getElementById('orch-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addOrchMsg('user', text);
+  document.getElementById('orch-thinking').style.display = 'block';
+  document.getElementById('orch-stop').style.display = '';
+
+  const res = await fetch(API+'/api/chat', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ message: text })
+  });
+  const data = await res.json();
+  document.getElementById('orch-thinking').style.display = 'none';
+  document.getElementById('orch-stop').style.display = 'none';
+  addOrchMsg('assistant', data.response || data.error);
+  fetchAgents(); // refresh kanban in case agents were spawned
+}
+
+// Clear main conversation + opencode session
+async function clearMainChat() {
+  if (!confirm('Clear orchestrator conversation and delete its opencode session? New chat will start fresh.')) return;
+  document.getElementById('orch-thinking').style.display = 'block';
+  await fetch(API+'/api/orchestrator/clear', { method: 'POST' });
+  document.getElementById('orch-chat').innerHTML = '';
+  document.getElementById('orch-thinking').style.display = 'none';
+  if (typeof loadHistory === 'function') await loadHistory();
+}
+
+// Stop (abort) agent đang chạy khi chat bị treo
+async function stopChat(which) {
+  const agentId = which === 'orchestrator' ? 'orchestrator' : selectedAgentId;
+  if (!agentId) return;
+  await fetch(API+'/api/agents/'+agentId+'/abort', { method: 'POST' });
+  document.getElementById('orch-thinking').style.display = 'none';
+  if (which === 'orchestrator') document.getElementById('orch-stop').style.display = 'none';
+  else document.getElementById('agent-stop').style.display = 'none';
+}
+
+// Esc = stop agent đang chạy
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') stopChat(document.getElementById('agent-detail').style.display !== 'none' ? 'agent' : 'orchestrator');
+});
+
+// Save main agent model
+async function saveSettings() {
+  const model = document.getElementById('set-model').value.trim();
+  await fetch(API+'/api/orchestrator/model', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ model: model || null })
+  });
+  hideModal('settings');
+  addOrchMsg('system', model ? `⚙ Main model set to "${model}"` : '⚙ Main model reset to default');
+}
+
+function addOrchMsg(role, content) {
+  const div = document.getElementById('orch-chat');
+  const cls = role === 'user' ? 'msg-user' : role === 'system' ? 'msg-system' : 'msg-assistant';
+  const label = role === 'user' ? 'You' : role === 'system' ? '⚙ System' : '🧠 Orchestrator';
+  div.innerHTML += `<div class="msg ${cls}"><div class="msg-label">${label}</div><div class="msg-content">${esc(content)}</div></div>`;
+  div.scrollTop = div.scrollHeight;
+}
+
+// ========== AGENT CHAT ==========
+async function sendAgentChat() {
+  if (!selectedAgentId) return;
+  const input = document.getElementById('agent-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addAgentMsg(selectedAgentId, 'user', text);
+  document.getElementById('agent-stop').style.display = '';
+
+  const res = await fetch(API+'/api/chat', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ message: text, targetAgentId: selectedAgentId })
+  });
+  const data = await res.json();
+  document.getElementById('agent-stop').style.display = 'none';
+  addAgentMsg(selectedAgentId, 'assistant', data.response || data.error);
+}
+
+function addAgentMsg(agentId, role, content) {
+  if (!agentChats[agentId]) agentChats[agentId] = [];
+  agentChats[agentId].push({ role, content, ts: Date.now() });
+  renderAgentChat();
+}
+
+function renderAgentChat() {
+  if (!selectedAgentId) return;
+  const msgs = agentChats[selectedAgentId] || [];
+  const div = document.getElementById('agent-chat');
+  div.innerHTML = msgs.map(m => {
+    const cls = m.role === 'user' ? 'msg-user' : 'msg-agent';
+    const label = m.role === 'user' ? 'You' : '🤖 Agent';
+    return `<div class="msg ${cls}"><div class="msg-label">${label}</div><div class="msg-content">${esc(m.content)}</div></div>`;
+  }).join('');
+  div.scrollTop = div.scrollHeight;
+}
+
+// ========== WEBSOCKET ==========
+function connectWS() {
+  const ws = new WebSocket('ws://' + location.host);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'agent:created' || msg.type === 'agent:updated' || msg.type === 'agent:deleted') {
+      fetchAgents();
+      if (selectedAgentId) selectAgent(selectedAgentId);
+    }
+    if (msg.type === 'chat:message' && msg.msg) {
+      const m = msg.msg;
+      if (m.from === 'user' || m.to === 'user') {
+        // Already handled by direct fetch
+      }
+      if (m.from !== 'user' && m.from !== 'orchestrator' && m.to === 'orchestrator') {
+        const label = m.agentName ? m.agentName + ' (' + m.agentRole + ')' : m.from;
+        addOrchMsg('system', '[' + label + '] ' + m.content);
+        if (!isSysMsg(m.content)) addAgentMsg(m.from, 'assistant', m.content);
+      }
+    }
+  };
+  ws.onclose = () => setTimeout(connectWS, 3000);
+}
+
+function isSysMsg(c) { return /^\[(PING|HEARTBEAT)\]/.test(c) || c.indexOf('[SYSTEM]')===0 || c.indexOf('[TEAM')===0; }
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Enter to send
+document.getElementById('orch-input').addEventListener('keydown', e => { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendOrchChat();} });
+document.getElementById('agent-input').addEventListener('keydown', e => { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAgentChat();} });
+
+// ========== LOAD HISTORY ==========
+async function loadHistory() {
+  try {
+    const res = await fetch(API + '/api/history');
+    const msgs = await res.json();
+    for (const m of msgs) {
+      // Orchestrator chat (user ↔ orchestrator)
+      if ((m.from === 'user' && m.to === 'orchestrator') || (m.from === 'orchestrator' && m.to === 'user')) {
+        const role = m.from === 'user' ? 'user' : 'assistant';
+        addOrchMsg(role, m.content);
+      }
+      // Agent chat (user ↔ agent or agent ↔ orchestrator from agent)
+      if (m.from === 'user' && m.to !== 'orchestrator') {
+        addAgentMsg(m.to, 'user', m.content);
+      }
+      if (m.from !== 'user' && m.from !== 'orchestrator' && m.to === 'user') {
+        addAgentMsg(m.from, 'assistant', m.content);
+      }
+      // Agent reports to orchestrator (show in orchestrator chat + agent detail right column)
+      if (m.from !== 'user' && m.from !== 'orchestrator' && m.to === 'orchestrator') {
+        const label = m.agentName ? m.agentName + ' (' + m.agentRole + ')' : m.from;
+        if (!isSysMsg(m.content)) {
+          addOrchMsg('system', '[' + label + '] ' + m.content);
+          addAgentMsg(m.from, 'assistant', m.content);
+        }
+      }
+    }
+  } catch (e) {
+    console.log('Failed to load history:', e);
+  }
+}
+
+// Init
+fetchAgents();
+connectWS();
+loadHistory();
+/* resize panes */(function(){const L=document.querySelector('.left-panel'),R=document.querySelector('.right-panel'),rl=document.getElementById('resizer-left'),rr=document.getElementById('resizer-right');function drag(resizer,panel,isLeft){let sX,sW;resizer.addEventListener('mousedown',e=>{sX=e.clientX;sW=panel.offsetWidth;document.body.style.cursor='col-resize';document.body.style.userSelect='none';function mm(ev){let dx=isLeft?ev.clientX-sX:sX-ev.clientX;let nw=sW+dx;nw=Math.max(220,Math.min(600,nw));panel.style.width=nw+'px';}function mu(){document.removeEventListener('mousemove',mm);document.removeEventListener('mouseup',mu);document.body.style.cursor='';document.body.style.userSelect='';}document.addEventListener('mousemove',mm);document.addEventListener('mouseup',mu);});}if(L&&rl)drag(rl,L,true);if(R&&rr)drag(rr,R,false);})();
+</script>
+</body>
+</html>
