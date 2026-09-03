@@ -12,6 +12,7 @@ interface Agent {
   sessionTitle?: string;
   model?: string;
   spawnedBy?: string;
+  teamId?: string;
   tokenUsage?: number | { totalTokens?: number; total?: number; inputTokens?: number; outputTokens?: number; cost?: number };
   contextLength?: number;
 }
@@ -24,6 +25,7 @@ interface Props {
   selectedAgentId: string | null;
   onUpdateModel?: (agentId: string, model: string | null) => void;
   onDeleteAgent?: (agentId: string) => void;
+  onDeleteTask?: (agentId: string, taskId: string | number) => void;
 }
 
 function formatTokens(tokens?: number): string {
@@ -91,12 +93,39 @@ const renderStatusBadge = (status: string) => {
   );
 };
 
-export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId, onUpdateModel, onDeleteAgent }: Props) {
-  const [models, setModels] = useState<string[]>([]);
+export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId, onUpdateModel, onDeleteAgent, onDeleteTask }: Props) {
+  const [models, setModels] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('af-models-cache');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed?.models)) return parsed.models;
+      }
+    } catch {}
+    return [];
+  });
   const [modelLoading, setModelLoading] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [creatingOrch, setCreatingOrch] = useState(false);
+  const [deletingTaskInfo, setDeletingTaskInfo] = useState<{ agentId: string; taskId: string | number } | null>(null);
   const safeAgents = Array.isArray(agents) ? agents : [];
+
+  const handleDeleteTask = async (agentId: string, taskId: string | number) => {
+    if (onDeleteTask) {
+      onDeleteTask(agentId, taskId);
+      return;
+    }
+    setDeletingTaskInfo({ agentId, taskId });
+    try {
+      await fetch(`/api/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(String(taskId))}`, {
+        method: 'DELETE'
+      });
+    } catch (err) {
+      console.error('Failed to delete task:', err);
+    } finally {
+      setDeletingTaskInfo(null);
+    }
+  };
 
   // Card element refs & auto-scroll on error/blocked status
   const agentCardRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
@@ -119,13 +148,21 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
     });
   }, [safeAgents]);
 
-  // Group orchestrators and worker hierarchy
-  const orchAgents = safeAgents.filter(a => a.id === 'orchestrator' || a.type === 'orchestrator' || a.role === 'orchestrator');
-  // Đảm bảo Main Orchestrator ('orchestrator') luôn là đầu tiên
-  const sortedOrchs = [
-    ...(orchAgents.find(a => a.id === 'orchestrator') ? [orchAgents.find(a => a.id === 'orchestrator')!] : [{ id: 'orchestrator', name: 'Orchestrator', role: 'orchestrator', type: 'orchestrator', status: 'idle' } as Agent]),
-    ...orchAgents.filter(a => a.id !== 'orchestrator')
-  ];
+  // Group orchestrators and worker hierarchy: Mọi Main Orchestrator đều ngang hàng nhau
+  const sortedOrchs = safeAgents.filter(a => a.id === 'orchestrator' || a.type === 'orchestrator' || a.role === 'orchestrator');
+
+  // Lấy danh sách tất cả teamId tồn tại trong hệ thống (từ orchestrator hoặc từ worker còn lại)
+  const allTeamIds = Array.from(new Set(
+    safeAgents.map(a => {
+      if (a.teamId) return a.teamId;
+      if (a.id === 'orchestrator') return 'default';
+      if (a.type === 'orchestrator' || a.role === 'orchestrator') return `team-${a.id.slice(-8)}`;
+      return 'default';
+    })
+  ));
+
+  // Các team mồ côi (đã xóa Orchestrator nhưng worker vẫn còn)
+  const orphanTeams = allTeamIds.filter(tId => !sortedOrchs.some(o => (o.teamId || (o.id === 'orchestrator' ? 'default' : `team-${o.id.slice(-8)}`)) === tId));
 
   const toggleCollapse = (orchId: string) => {
     setCollapsed(prev => ({ ...prev, [orchId]: !prev[orchId] }));
@@ -160,11 +197,53 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
 
   useEffect(() => {
     const loadModels = async () => {
-      setModelLoading(true);
+      let isFresh = false;
+      try {
+        const raw = localStorage.getItem('af-models-cache');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed?.models) && parsed.models.length > 0) {
+            setModels(parsed.models);
+            if (typeof parsed.timestamp === 'number' && Date.now() - parsed.timestamp < 5 * 60 * 1000) {
+              isFresh = true;
+            }
+          }
+        }
+      } catch {}
+
+      // Nếu cache còn hạn < 5 phút thì không cần fetch lại, không hiện loading
+      if (isFresh) return;
+
+      // Chỉ hiện modelLoading nếu chưa có model nào trong state/cache
+      if (models.length === 0) {
+        setModelLoading(true);
+      }
       try {
         const res = await fetch('/api/models');
-        const data = await res.json();
-        if (Array.isArray(data.models)) setModels(data.models);
+        if (res.ok) {
+          const data = await res.json();
+          const modelList: string[] = [];
+          if (Array.isArray(data.models)) {
+            modelList.push(...data.models);
+          } else if (Array.isArray(data.providers)) {
+            for (const p of data.providers) {
+              if (p?.models && typeof p.models === 'object') {
+                for (const mId of Object.keys(p.models)) {
+                  modelList.push(`${p.id}/${mId}`);
+                }
+              }
+            }
+          }
+          if (modelList.length > 0) {
+            setModels(modelList);
+            try {
+              localStorage.setItem('af-models-cache', JSON.stringify({
+                models: modelList,
+                timestamp: Date.now()
+              }));
+            } catch {}
+          }
+        }
       } catch (e) {
         console.error('Failed to load models:', e);
       } finally {
@@ -279,112 +358,162 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
 
       {/* Orchestrator Groups & Hierarchy */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {sortedOrchs.map((orch) => {
-          const isOrchSelected = selectedAgentId === (orch.id === 'orchestrator' ? null : orch.id) || (selectedAgentId === 'orchestrator' && orch.id === 'orchestrator');
-          const isOrchError = orch.status === 'error' || orch.status === 'blocked';
-          const isMain = orch.id === 'orchestrator';
-          const isCollapsed = Boolean(collapsed[orch.id]);
+        {sortedOrchs.length === 0 && orphanTeams.length === 0 ? (
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '36px 16px',
+            background: 'rgba(15, 23, 42, 0.4)',
+            borderRadius: 12,
+            border: '2px dashed var(--af-border-strong)',
+            gap: 12,
+            textAlign: 'center'
+          }}>
+            <span style={{ fontSize: 32 }}>👑</span>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+              Chưa có Orchestrator nào trong hệ thống
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', maxWidth: 320, lineHeight: 1.5 }}>
+              Mọi Main Orchestrator đều ngang hàng và quản lý workspace riêng. Bấm nút dưới để tạo Orchestrator / Team mới.
+            </div>
+            <button
+              onClick={handleCreateOrchestrator}
+              disabled={creatingOrch}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.9) 0%, rgba(99, 102, 241, 0.9) 100%)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                padding: '8px 16px',
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: creatingOrch ? 'wait' : 'pointer',
+                boxShadow: '0 2px 10px rgba(139, 92, 246, 0.35)'
+              }}
+            >
+              <span>👑</span>
+              <span>+ Tạo Orchestrator mới</span>
+            </button>
+          </div>
+        ) : (
+          <>
+          {sortedOrchs.map((orch) => {
+            const isOrchSelected = selectedAgentId === orch.id || (!selectedAgentId && sortedOrchs[0]?.id === orch.id);
+            const isOrchError = orch.status === 'error' || orch.status === 'blocked';
+            const isCollapsed = Boolean(collapsed[orch.id]);
 
-          // Tìm các worker thuộc về orchestrator này
-          const childWorkers = safeAgents.filter(a => {
-            if (a.id === orch.id || a.type === 'orchestrator' || a.role === 'orchestrator') return false;
-            if (a.spawnedBy === orch.id) return true;
-            if (!a.spawnedBy && isMain) return true; // Chưa gán spawnedBy thì thuộc main
-            return false;
-          });
+            // Tìm các worker thuộc về orchestrator này: Khớp chính xác theo teamId hoặc spawnedBy
+            const orchTeamId = orch.teamId || (orch.id === 'orchestrator' ? 'default' : `team-${orch.id.slice(-8)}`);
+            const childWorkers = safeAgents.filter(a => {
+              if (a.id === orch.id || a.type === 'orchestrator' || a.role === 'orchestrator') return false;
+              // 1. So khớp chính xác theo teamId
+              if (a.teamId && orchTeamId) {
+                return a.teamId === orchTeamId;
+              }
+              // 2. So khớp theo spawnedBy
+              if (a.spawnedBy) {
+                return a.spawnedBy === orch.id;
+              }
+              return false;
+            });
 
-          const rawTokens = orch.contextLength || (orch.tokenUsage && typeof orch.tokenUsage === 'object' ? ((orch.tokenUsage as any).totalTokens || (orch.tokenUsage as any).total) : orch.tokenUsage);
-          const tokens = formatTokens(rawTokens);
-          const tooltip = (() => {
-            const tu = typeof orch.tokenUsage === 'object' ? orch.tokenUsage : null;
-            const parts: string[] = [];
-            if (rawTokens) parts.push(`Total: ${rawTokens.toLocaleString()} tokens`);
-            if (tu?.inputTokens) parts.push(`Input: ${tu.inputTokens.toLocaleString()}`);
-            if (tu?.outputTokens) parts.push(`Output: ${tu.outputTokens.toLocaleString()}`);
-            if (tu?.cost) parts.push(`Cost: $${tu.cost.toFixed(4)}`);
-            return parts.length > 0 ? parts.join(' | ') : `Context: ${rawTokens?.toLocaleString() || 0} tokens`;
-          })();
+            const rawTokens = orch.contextLength || (orch.tokenUsage && typeof orch.tokenUsage === 'object' ? ((orch.tokenUsage as any).totalTokens || (orch.tokenUsage as any).total) : orch.tokenUsage);
+            const tokens = formatTokens(rawTokens);
+            const tooltip = (() => {
+              const tu = typeof orch.tokenUsage === 'object' ? orch.tokenUsage : null;
+              const parts: string[] = [];
+              if (rawTokens) parts.push(`Total: ${rawTokens.toLocaleString()} tokens`);
+              if (tu?.inputTokens) parts.push(`Input: ${tu.inputTokens.toLocaleString()}`);
+              if (tu?.outputTokens) parts.push(`Output: ${tu.outputTokens.toLocaleString()}`);
+              if (tu?.cost) parts.push(`Cost: $${tu.cost.toFixed(4)}`);
+              return parts.length > 0 ? parts.join(' | ') : `Context: ${rawTokens?.toLocaleString() || 0} tokens`;
+            })();
 
-          return (
-            <div key={orch.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {/* Orchestrator Header Card (2-Line Compact Layout) */}
-              <div
-                ref={(el) => { agentCardRefs.current[orch.id] = el; }}
-                onClick={() => onSelect(isMain ? null : orch.id)}
-                className="interactive-card af-card"
-                style={{
-                  background: isOrchError
-                    ? 'rgba(239, 68, 68, 0.15)'
-                    : isOrchSelected
-                    ? 'var(--bg-card-active)'
-                    : 'var(--bg-card)',
-                  borderRadius: 8,
-                  padding: '9px 11px',
-                  border: isOrchError
-                    ? '1px solid #ef4444'
-                    : isOrchSelected
-                    ? '2px solid var(--accent-strong)'
-                    : '1px solid var(--af-border)',
-                  boxShadow: isOrchError
-                    ? '0 0 16px rgba(239, 68, 68, 0.25)'
-                    : isOrchSelected
-                    ? '0 0 24px -2px var(--accent)'
-                    : 'none',
-                  cursor: 'pointer',
-                  width: '100%',
-                  maxWidth: '100%',
-                  boxSizing: 'border-box',
-                  overflow: 'hidden'
-                }}
-              >
-                {/* Line 1: Header title, count badge, status badge, delete button, collapse toggle */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 6 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
-                    <span style={{ fontSize: 16, flexShrink: 0 }}>{isCollapsed ? '📁' : '📂'}</span>
-                    <span style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      👑 {isMain ? 'Main Orchestrator' : (orch.name || 'Orchestrator')}
-                    </span>
-                    <span style={{
-                      fontSize: 10.5,
-                      color: 'var(--text-muted)',
-                      background: 'rgba(148, 163, 184, 0.12)',
-                      padding: '1px 5px',
-                      borderRadius: 4,
-                      fontWeight: 600,
-                      flexShrink: 0
-                    }}>
-                      ({childWorkers.length})
-                    </span>
-                  </div>
+            return (
+              <div key={orch.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {/* Orchestrator Header Card (2-Line Compact Layout) */}
+                <div
+                  ref={(el) => { agentCardRefs.current[orch.id] = el; }}
+                  onClick={() => onSelect(orch.id)}
+                  className="interactive-card af-card"
+                  style={{
+                    background: isOrchError
+                      ? 'rgba(239, 68, 68, 0.15)'
+                      : isOrchSelected
+                      ? 'var(--bg-card-active)'
+                      : 'var(--bg-card)',
+                    borderRadius: 8,
+                    padding: '9px 11px',
+                    border: isOrchError
+                      ? '1px solid #ef4444'
+                      : isOrchSelected
+                      ? '2px solid var(--accent-strong)'
+                      : '1px solid var(--af-border)',
+                    boxShadow: isOrchError
+                      ? '0 0 16px rgba(239, 68, 68, 0.25)'
+                      : isOrchSelected
+                      ? '0 0 24px -2px var(--accent)'
+                      : 'none',
+                    cursor: 'pointer',
+                    width: '100%',
+                    maxWidth: '100%',
+                    boxSizing: 'border-box',
+                    overflow: 'hidden'
+                  }}
+                >
+                  {/* Line 1: Header title, count badge, status badge, delete button, collapse toggle */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{isCollapsed ? '📁' : '📂'}</span>
+                      <span style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        👑 {orch.name || 'Orchestrator'}
+                      </span>
+                      <span style={{
+                        fontSize: 10.5,
+                        color: 'var(--text-muted)',
+                        background: 'rgba(148, 163, 184, 0.12)',
+                        padding: '1px 5px',
+                        borderRadius: 4,
+                        fontWeight: 600,
+                        flexShrink: 0
+                      }}>
+                        ({childWorkers.length})
+                      </span>
+                    </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                    {renderStatusBadge(orch.status)}
-                    {!isMain && onDeleteAgent && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (window.confirm(`Xoá Sub-Orchestrator ${orch.name} (${orch.id})? Toàn bộ worker của team này sẽ được chuyển về Main Orchestrator.`)) {
-                            onDeleteAgent(orch.id);
-                          }
-                        }}
-                        title="Xoá Team Orchestrator này"
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          color: 'var(--wb-danger)',
-                          cursor: 'pointer',
-                          padding: '2px 4px',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          borderRadius: 4,
-                          transition: 'color 0.15s'
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--wb-danger-strong)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--wb-danger)'; }}
-                      >
-                        ✕
-                      </button>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                      {renderStatusBadge(orch.status)}
+                      {onDeleteAgent && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Xoá Orchestrator ${orch.name || orch.id}? (Các worker trong team vẫn được giữ lại cho đến khi từng agent bị xóa)`)) {
+                              onDeleteAgent(orch.id);
+                            }
+                          }}
+                          title="Xoá Orchestrator này"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--wb-danger, #ef4444)',
+                            cursor: 'pointer',
+                            padding: '2px 4px',
+                            fontSize: 12,
+                            fontWeight: 700,
+                            borderRadius: 4,
+                            transition: 'color 0.15s'
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--wb-danger-strong, #dc2626)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--wb-danger, #ef4444)'; }}
+                        >
+                          ✕
+                        </button>
+                      )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -498,6 +627,37 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                     💬 {orch.sessionTitle}
                   </div>
                 )}
+
+                {/* Orchestrator Tasks if exists */}
+                {(() => {
+                  const parsedOrchTasks = parseAgentTaskList(orch);
+                  if (!Array.isArray(parsedOrchTasks) || parsedOrchTasks.length === 0) return null;
+                  return (
+                    <div style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      marginTop: 6,
+                      padding: '6px 8px',
+                      background: orch.status === 'working' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                      borderRadius: 6,
+                      border: orch.status === 'working' ? '1px solid rgba(59, 130, 246, 0.45)' : '1px solid var(--af-border)'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: orch.status === 'working' ? 'var(--accent, #3b82f6)' : 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span>{orch.status === 'working' ? '⚡ Đang thực thi:' : '🎯 Nhiệm vụ:'}</span>
+                        </span>
+                      </div>
+                      <div style={{ maxHeight: 110, overflowY: 'auto' }}>
+                        {renderAgentTaskList(parsedOrchTasks, {
+                          agentId: orch.id,
+                          onDeleteTask: (tId) => handleDeleteTask(orch.id, tId),
+                          deletingTaskId: deletingTaskInfo?.agentId === orch.id ? deletingTaskInfo.taskId : null
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Children Subagents List (Clean Minimalist Tree) */}
@@ -690,7 +850,11 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                                   </span>
                                 </div>
                                 <div style={{ maxHeight: 110, overflowY: 'auto' }}>
-                                  {renderAgentTaskList(parsedTasks)}
+                                  {renderAgentTaskList(parsedTasks, {
+                                    agentId: agent.id,
+                                    onDeleteTask: (tId) => handleDeleteTask(agent.id, tId),
+                                    deletingTaskId: deletingTaskInfo?.agentId === agent.id ? deletingTaskInfo.taskId : null
+                                  })}
                                 </div>
                               </div>
                             );
@@ -728,9 +892,187 @@ export function Dashboard({ agents, onStart, onSpawn, onSelect, selectedAgentId,
                   )}
                 </div>
               )}
-            </div>
-          );
-        })}
+              </div>
+            );
+          })}
+
+          {/* Các Team còn worker nhưng Main Orchestrator đã bị xóa */}
+          {orphanTeams.map((teamId) => {
+            const teamWorkers = safeAgents.filter(a => {
+              if (a.type === 'orchestrator' || a.role === 'orchestrator') return false;
+              return (a.teamId || 'default') === teamId;
+            });
+            if (teamWorkers.length === 0) return null;
+            const isTeamCollapsed = Boolean(collapsed[teamId]);
+
+            return (
+              <div key={teamId} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {/* Team Header Card */}
+                <div
+                  className="interactive-card af-card"
+                  style={{
+                    background: 'var(--bg-card)',
+                    borderRadius: 8,
+                    padding: '9px 11px',
+                    border: '1px dashed var(--af-border-strong)',
+                    width: '100%',
+                    maxWidth: '100%',
+                    boxSizing: 'border-box',
+                    overflow: 'hidden'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{isTeamCollapsed ? '📁' : '📂'}</span>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        👥 Team Workspace ({teamId})
+                      </span>
+                      <span style={{
+                        fontSize: 10.5,
+                        color: 'var(--text-muted)',
+                        background: 'rgba(148, 163, 184, 0.12)',
+                        padding: '1px 5px',
+                        borderRadius: 4,
+                        fontWeight: 600,
+                        flexShrink: 0
+                      }}>
+                        ({teamWorkers.length} workers)
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleCollapse(teamId);
+                      }}
+                      title={isTeamCollapsed ? "Mở rộng Workspace" : "Thu gọn Workspace"}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: 0,
+                        width: 18,
+                        height: 18,
+                        borderRadius: 3,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{
+                          transform: isTeamCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                          transition: 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                        }}
+                      >
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                    Main Orchestrator đã xóa. Team tự giải tán khi tất cả worker bị xóa.
+                  </div>
+                </div>
+
+                {/* Danh sách Worker thuộc Team này */}
+                {!isTeamCollapsed && (
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    paddingLeft: 16,
+                    marginLeft: 8,
+                    borderLeft: '2px solid rgba(148, 163, 184, 0.15)'
+                  }}>
+                    {teamWorkers.map((agent) => {
+                      const isSelected = selectedAgentId === agent.id;
+                      const isError = agent.status === 'error' || agent.status === 'blocked';
+                      const roleIcon = getRoleIcon(agent.role);
+                      const agentRawTokens = agent.contextLength || (agent.tokenUsage && typeof agent.tokenUsage === 'object' ? ((agent.tokenUsage as any).totalTokens || (agent.tokenUsage as any).total) : agent.tokenUsage);
+                      const agentTokens = formatTokens(agentRawTokens);
+
+                      return (
+                        <div
+                          key={agent.id}
+                          ref={(el) => { agentCardRefs.current[agent.id] = el; }}
+                          onClick={() => onSelect(agent.id)}
+                          className={`interactive-card af-card${agent.status === 'working' ? ' af-working' : ''}`}
+                          style={{
+                            background: isError
+                              ? 'rgba(239, 68, 68, 0.15)'
+                              : isSelected
+                              ? 'var(--bg-card-active)'
+                              : 'var(--bg-card)',
+                            borderRadius: 10,
+                            padding: 12,
+                            border: isError
+                              ? '1px solid #ef4444'
+                              : isSelected
+                              ? '2px solid var(--accent-strong)'
+                              : '1px solid var(--af-border)',
+                            cursor: 'pointer',
+                            width: '100%',
+                            boxSizing: 'border-box'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                              <span style={{ fontSize: 16, flexShrink: 0 }}>{roleIcon}</span>
+                              <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {agent.name || agent.role}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                              {renderStatusBadge(agent.status)}
+                              {onDeleteAgent && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (window.confirm(`Xoá agent ${agent.name || agent.id}?`)) {
+                                      onDeleteAgent(agent.id);
+                                    }
+                                  }}
+                                  title="Xoá Agent này"
+                                  style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: 'var(--wb-danger, #ef4444)',
+                                    cursor: 'pointer',
+                                    padding: '2px 4px',
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    borderRadius: 4
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{agent.role}</span>
+                            <span style={{ fontSize: 10.5, color: 'var(--wb-info)', fontFamily: 'monospace' }}>⚡ {agentTokens}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          </>
+        )}
       </div>
     </div>
   );

@@ -26,7 +26,7 @@ interface ChatMsg {
   thinking?: string;
   // Ordered parts (Option C): text + tool xen kẽ theo ĐÚNG thứ tự opencode emit — server gửi trong final snapshot.
   // Client render trực tiếp theo array. OPTIONAL (không có → render theo cách cũ).
-  parts?: Array<{ type: 'text' | 'tool'; content?: string; tool?: string; input?: string; output?: string }>;
+  parts?: Array<{ type: 'text' | 'tool' | 'thinking'; content?: string; tool?: string; input?: string; output?: string }>;
 }
 
 interface AgentInfo {
@@ -1619,18 +1619,26 @@ function TodoListViewer({ input, output }: { input?: string; output?: string }) 
   );
 }
 
-function renderToolBadge(tool: string, parsedInput: any, safeInput: string): React.ReactNode {
+function renderToolBadge(tool: string, parsedInput: any, safeInput: string, isMobile?: boolean): React.ReactNode {
   const norm = String(tool || '').toLowerCase().trim();
 
   // Extract file path if present
   const filePath = (parsedInput && (typeof parsedInput.filePath === 'string' ? parsedInput.filePath : (typeof parsedInput.path === 'string' ? parsedInput.path : ''))) || '';
+
+  // ══ FIX UX mobile: path file bị cắt cụt không đọc được trọn tên file ══
+  // Mobile: inline-block + overflowX:auto + maxWidth → tạo BOX scroll ngang THẬT (span inline
+  // thuần KHÔNG tạo scroll được — overflow chỉ hiệu lực trên block/inline-block có box riêng).
+  // Desktop: inline-block + ellipsis + maxWidth 360px giữ gọn (ellipsis cũng chỉ chạy trên inline-block).
+  const pathStyle: React.CSSProperties = isMobile
+    ? { display: 'inline-block', overflowX: 'auto', overflowY: 'hidden', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5, maxWidth: '100%', verticalAlign: 'bottom', scrollbarWidth: 'thin' }
+    : { display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5, maxWidth: 360, verticalAlign: 'bottom' };
 
   if (norm === 'edit') {
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
         {extIcon(filePath)}
         <span style={{ color: '#fb923c', fontWeight: 600, fontSize: 11 }}>Edit:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{filePath || 'file'}</span>
+        <span style={pathStyle} title={filePath || 'file'}>{filePath || 'file'}</span>
       </span>
     );
   }
@@ -1640,7 +1648,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
         {extIcon(filePath)}
         <span style={{ color: '#fde047', fontWeight: 600, fontSize: 11 }}>Write:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{filePath || 'file'}</span>
+        <span style={pathStyle} title={filePath || 'file'}>{filePath || 'file'}</span>
       </span>
     );
   }
@@ -1650,7 +1658,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
         {extIcon(filePath)}
         <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>Read:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{filePath || 'file'}</span>
+        <span style={pathStyle} title={filePath || 'file'}>{filePath || 'file'}</span>
       </span>
     );
   }
@@ -1662,7 +1670,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>💻</span>
         <span style={{ color: '#4ade80', fontWeight: 600, fontSize: 11 }}>Bash:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5, maxWidth: 360 }}>{cleanCmd || 'command'}</span>
+        <span style={{ ...pathStyle, maxWidth: isMobile ? '100%' : 360 }} title={cleanCmd || 'command'}>{cleanCmd || 'command'}</span>
       </span>
     );
   }
@@ -1674,7 +1682,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>📁</span>
         <span style={{ color: '#22d3ee', fontWeight: 600, fontSize: 11 }}>Glob:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{pattern || '*'}{path ? ` in ${path}` : ''}</span>
+        <span style={pathStyle} title={path || pattern || '*'}>{pattern || '*'}{path ? ` in ${path}` : ''}</span>
       </span>
     );
   }
@@ -1686,7 +1694,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>🔍</span>
         <span style={{ color: '#f472b6', fontWeight: 600, fontSize: 11 }}>Grep:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>/{pattern}/{path ? ` in ${path}` : ''}</span>
+        <span style={pathStyle} title={path || pattern || ''}>/{pattern}/{path ? ` in ${path}` : ''}</span>
       </span>
     );
   }
@@ -1697,7 +1705,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>🔍</span>
         <span style={{ color: '#f472b6', fontWeight: 600, fontSize: 11 }}>Search:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{query || 'query'}</span>
+        <span style={pathStyle} title={query || 'query'}>{query || 'query'}</span>
       </span>
     );
   }
@@ -1708,7 +1716,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>🌐</span>
         <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>Fetch:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5, maxWidth: 320 }}>{url || 'url'}</span>
+        <span style={{ ...pathStyle, maxWidth: isMobile ? '100%' : 320 }} title={url || 'url'}>{url || 'url'}</span>
       </span>
     );
   }
@@ -1719,7 +1727,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>🌐</span>
         <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>WebSearch:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{query || 'search'}</span>
+        <span style={pathStyle} title={query || 'search'}>{query || 'search'}</span>
       </span>
     );
   }
@@ -1730,7 +1738,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>📋</span>
         <span style={{ color: '#fb923c', fontWeight: 600, fontSize: 11 }}>TodoList:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{count ? `${count} tasks` : 'update'}</span>
+        <span style={pathStyle} title={count ? `${count} tasks` : 'update'}>{count ? `${count} tasks` : 'update'}</span>
       </span>
     );
   }
@@ -1741,7 +1749,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
         <span>⚡</span>
         <span style={{ color: '#facc15', fontWeight: 600, fontSize: 11 }}>Skill:</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{name || 'custom'}</span>
+        <span style={pathStyle} title={name || 'custom'}>{name || 'custom'}</span>
       </span>
     );
   }
@@ -1752,7 +1760,7 @@ function renderToolBadge(tool: string, parsedInput: any, safeInput: string): Rea
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
       <span>🔧</span>
       <span style={{ color: '#38bdf8', fontWeight: 600, fontSize: 11 }}>{String(tool || 'tool')}:</span>
-      {target && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 500, fontSize: 11.5 }}>{target}</span>}
+      {target && <span style={pathStyle} title={target}>{target}</span>}
     </span>
   );
 }
@@ -1889,11 +1897,14 @@ function ToolCallBlock({ tool, input, output, isMobile }: ToolCallData & { isMob
           padding: '2px 8px',
           fontFamily: 'monospace',
           whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          maxWidth: '70%'
+          // FIX UX mobile: mobile → overflow-x auto (kéo ngang xem trọn path), không ellipsis.
+          //   Cần minWidth:0 để flex container thu nhỏ được, con inline-block scroll ngang.
+          //   Desktop → giữ gọn: ellipsis + maxWidth 70%.
+          ...(isMobile
+            ? { overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'thin', maxWidth: '100%', minWidth: 0 }
+            : { overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '70%' })
         }}>
-          {renderToolBadge(safeTool, parsedInput, safeInput)}
+          {renderToolBadge(safeTool, parsedInput, safeInput, isMobile)}
         </span>
 
         {/* Bên phải: Ngôn ngữ nhỏ gọn + Nút Copy + Nút Thu/Phóng */}
@@ -2359,11 +2370,18 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   // Option C: server gửi msg.parts (text + tool xen kẽ theo đúng thứ tự emit). Nếu có → render interleaved,
   // bỏ qua Khối 2 (toolCalls block riêng) + Khối 3 (bubble text) để không in trùng.
   const hasParts = Array.isArray((msg as any).parts) && (msg as any).parts.length > 0;
+  // Option A: parts có chứa 1+ phần 'thinking' → thinking nằm trong mảng interleaved, render đúng vị trí.
+  // Khi đó ta ẨN Khối 1 fixed-top (trùng thinking) để không in 2 lần.
+  const hasThinkingInParts = hasParts && ((msg as any).parts as any[]).some((p: any) => p && p.type === 'thinking' && String(p.content || '').trim().length > 0);
   const isRawCommandOutput = isOpenCode && /(?:<talk\s+|<spawn\s+|\[TALK\s+|\[SPAWN\s+|===\s*(?:TASK|ERROR|VERIFICATION)\s+REPORT\s*===)/i.test(msg.content || '');
   // Guard bubble rỗng: message chỉ có thinking/toolCall (content rỗng) KHÔNG tạo bubble text rỗng (cục tròn)
   const hasBubbleContent = !!body && String(body).trim().length > 0;
 
-  if (isOrchestratorInternal && msg.from === 'orchestrator' && !msg.showOnUI) {
+  // Ẩn tin nội bộ: (1) orchestrator gửi lệnh nội bộ, (2) system broadcast nội bộ cho orchestrator
+  // (from:'system' + to:'orchestrator' + msgType:'internal' do forwardToOrchestrator tạo).
+  // GIỮ tin system hướng tới user (to:'user', msgType:'error', to:'all') — user cần thấy.
+  if ((isOrchestratorInternal && msg.from === 'orchestrator' && !msg.showOnUI) ||
+      (msg.from === 'system' && msg.to === 'orchestrator' && !msg.showOnUI)) {
     return null;
   }
 
@@ -2517,8 +2535,9 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         )}
       </div>
 
-{/* Khối 1: Thinking (nếu có) — nằm riêng độc lập, NGOÀI bubble */}
-      {typeof msg.thinking === 'string' && msg.thinking.trim() && (
+{/* Khối 1: Thinking (nếu có) — nằm riêng độc lập, NGOÀI bubble.
+        ẨN khi parts đã chứa thinking (hasThinkingInParts) — thinking interleaved render đúng vị trí trong mảng. */}
+      {!hasThinkingInParts && typeof msg.thinking === 'string' && msg.thinking.trim() && (
         <div style={{
           display: 'flex',
           flexDirection: 'column',
@@ -2585,6 +2604,16 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                   <ToolBlockSafe>
                     <ToolCallBlock tool={safeTool.tool} input={safeTool.input} output={safeTool.output} isMobile={isMobile} />
                   </ToolBlockSafe>
+                </div>
+              );
+            }
+            // Option A: phần 'thinking' interleaved — render collapsible ĐÚNG vị trí trong mảng parts.
+            if (part.type === 'thinking') {
+              const thinkContent = String(part.content || '').trim();
+              if (!thinkContent) return null;
+              return (
+                <div key={'pt-' + i} style={{ width: '100%', maxWidth: isMobile ? '98%' : '100%' }}>
+                  <ThinkingBlock thinking={thinkContent} />
                 </div>
               );
             }

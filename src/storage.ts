@@ -67,8 +67,12 @@ export interface OutboxReport {
   message: string;
   createdAt: number;
   attempts: number;
-  status: 'pending' | 'delivered' | 'failed';
+  // ACK-based state machine: pending → in_flight → delivered | failed → (retrying qua backoff).
+  // 'delivered' CHỈ đặt khi client.enqueue/deliverTalk THÀNH CÔNG (client ACK).
+  status: 'pending' | 'in_flight' | 'delivered' | 'failed';
   lastError?: string;
+  // Thời điểm sớm nhất được phép retry (epoch ms) — dùng cho trạng thái 'failed' (backoff).
+  nextAttemptAt?: number;
 }
 
 // Hàng đợi chat user thất bại do backend (LLM) sập / lỗi mạng.
@@ -115,6 +119,12 @@ let inMemoryUnprocessedUserMessages: Record<string, string[]> = {};
 let inMemoryLogs: SystemLogEntry[] = [];
 let isDirty = false;
 let isWriting = false;
+
+// In-memory tracker: thời điểm record outbox bị đặt 'in_flight'. Dùng để phát hiện
+// record treo (enqueue không resolve / server chết giữa delivery) mà chưa được đánh
+// dấu delivered/failed → getOutboxForRetry đưa về 'pending' để retry.
+const outboxInFlightAt = new Map<string, number>();
+const OUTBOX_IN_FLIGHT_TIMEOUT_MS = 30000; // 30s: quá lâu không resolve → coi là treo
 
 function validateSchema(data: any): data is StorageSchema {
   return (
@@ -364,7 +374,7 @@ export const storage = {
     schedulePersist();
   },
 
-  updateAgent(id: string, updates: { status?: string; sessionId?: string | null; sessionTitle?: string | null; model?: string | null; workingSince?: number | null; tokenUsage?: any; contextLength?: number | null }) {
+  updateAgent(id: string, updates: { status?: string; sessionId?: string | null; sessionTitle?: string | null; model?: string | null; workingSince?: number | null; tokenUsage?: any; contextLength?: number | null; task?: string; tasks?: any[]; teamId?: string; spawnedBy?: string }) {
     const existing = inMemoryAgents.get(id) || {};
     const updated = {
       ...existing,
@@ -374,7 +384,11 @@ export const storage = {
       model: 'model' in updates ? (updates.model !== undefined ? updates.model : null) : existing.model,
       working_since: 'workingSince' in updates ? (updates.workingSince !== undefined ? updates.workingSince : null) : existing.working_since,
       token_usage: 'tokenUsage' in updates ? (updates.tokenUsage !== undefined ? updates.tokenUsage : null) : existing.token_usage,
-      context_length: 'contextLength' in updates ? (updates.contextLength !== undefined ? updates.contextLength : null) : existing.context_length
+      context_length: 'contextLength' in updates ? (updates.contextLength !== undefined ? updates.contextLength : null) : existing.context_length,
+      task: 'task' in updates ? updates.task : existing.task,
+      tasks: 'tasks' in updates ? updates.tasks : existing.tasks,
+      teamId: 'teamId' in updates ? updates.teamId : (existing.teamId || (id === 'orchestrator' ? 'default' : undefined)),
+      spawnedBy: 'spawnedBy' in updates ? updates.spawnedBy : existing.spawnedBy
     };
     inMemoryAgents.set(id, updated);
     schedulePersist();
@@ -455,21 +469,67 @@ export const storage = {
       it.status = 'delivered';
       it.attempts = (it.attempts || 0) + 1;
     }
+    outboxInFlightAt.delete(id);
+    schedulePersist();
+  },
+
+  // Đặt trạng thái 'in_flight' TRƯỚC khi gọi client.enqueue — không tăng attempts.
+  // Nếu enqueue thất bại giữa chừng, record không bị đánh dấu delivered sớm → retry được.
+  markOutboxInFlight(id: string) {
+    const it = inMemoryOutbox.find(r => r.id === id);
+    if (it) {
+      it.status = 'in_flight';
+      outboxInFlightAt.set(id, Date.now());
+    }
     schedulePersist();
   },
 
   markOutboxFailed(id: string, err?: any) {
     const it = inMemoryOutbox.find(r => r.id === id);
     if (it) {
-      it.status = 'pending';
+      // 'failed' (KHÔNG phải 'pending') + nextAttemptAt backoff → vòng quét định kỳ retry
+      it.status = 'failed';
       it.attempts = (it.attempts || 0) + 1;
       it.lastError = err?.message || (typeof err === 'string' ? err : undefined);
+      it.nextAttemptAt = Date.now() + Math.min(5000 * Math.pow(2, Math.min(it.attempts, 6)), 10 * 60 * 1000);
     }
+    outboxInFlightAt.delete(id);
     schedulePersist();
   },
 
   getPendingOutbox() {
     return inMemoryOutbox.filter(r => r.status === 'pending');
+  },
+
+  // Tra cứu 1 record outbox trực tiếp theo id (bất kể trạng thái) — dùng trong catch path
+  getOutboxRecord(id: string) {
+    return inMemoryOutbox.find(r => r.id === id);
+  },
+
+  // ACK-based: trả về các record cần retry — status 'pending' HOẶC 'failed' đã tới hạn
+  // nextAttemptAt, HOẶC 'in_flight' MẤT stamp (crash/restart giữa chừng → coi treo).
+  // KHÔNG reset 'in_flight' khi in-memory stamp `inFlightSince` còn tồn tại: turn agent có thể
+  // chạy >30s (enqueue chưa resolve) nhưng vẫn đang active — reset sai → retry vô hạn vòng lặp.
+  getOutboxForRetry() {
+    const now = Date.now();
+    return inMemoryOutbox.filter(r => {
+      if (r.status === 'pending') return true;
+      if (r.status === 'failed') return (r.nextAttemptAt === undefined || r.nextAttemptAt <= now);
+      if (r.status === 'in_flight') {
+        const inFlightSince = outboxInFlightAt.get(r.id);
+        // CHỈ reset khi stamp in-memory MẤT (undefined) — do crash/restart server giữa chừng →
+        // record in_flight còn trong DB là treo, đưa về pending để retry.
+        // Nếu stamp CÒN (inFlightSince !== undefined) → process đang active dù quá 30s → KHÔNG
+        // reset, KHÔNG trả retry (tránh tái gửi/chạy lại turn đang xử lý cùng nội dung).
+        if (inFlightSince === undefined) {
+          // Mất stamp → quay lại pending để retry (enqueue treo/không resolve)
+          r.status = 'pending';
+          outboxInFlightAt.delete(r.id);
+          return true;
+        }
+      }
+      return false;
+    });
   },
 
   resetOutboxAttempts(ids: string[]) {

@@ -30,7 +30,16 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
   const [orchestratorModel, setOrchestratorModel] = useState('');
   const [defaultSubagentModel, setDefaultSubagentModel] = useState('');
   const [agentModelOverrides, setAgentModelOverrides] = useState<Record<string, string>>({});
-  const [models, setModels] = useState<string[]>([]);
+  const [models, setModels] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('af-models-cache');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed?.models)) return parsed.models;
+      }
+    } catch {}
+    return [];
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -46,29 +55,64 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
+  const API = window.location.port === '5173' ? '' : (window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:4001');
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
-        const modelsRes = await fetch('/api/models');
-        const modelsData = await modelsRes.json();
-        const modelList: string[] = [];
-        if (Array.isArray(modelsData.models)) {
-          modelList.push(...modelsData.models);
-        } else if (Array.isArray(modelsData.providers)) {
-          for (const p of modelsData.providers) {
-            if (p?.models && typeof p.models === 'object') {
-              for (const mId of Object.keys(p.models)) {
-                modelList.push(`${p.id}/${mId}`);
+        let isCacheFresh = false;
+        try {
+          const raw = localStorage.getItem('af-models-cache');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed?.models) && parsed.models.length > 0) {
+              setModels(parsed.models);
+              if (typeof parsed.timestamp === 'number' && Date.now() - parsed.timestamp < 5 * 60 * 1000) {
+                isCacheFresh = true;
               }
             }
           }
-        }
-        setModels(modelList);
+        } catch {}
 
-        const settingsRes = await fetch('/api/settings/models');
-        if (settingsRes.ok) {
-          const settingsData = await settingsRes.json();
+        // Song song hóa 2 API calls bằng Promise.all
+        const fetchModelsPromise = isCacheFresh
+          ? Promise.resolve(null)
+          : fetch(`${API}/api/models`).then(r => r.ok ? r.json() : null).catch(() => null);
+
+        const fetchSettingsPromise = fetch(`${API}/api/settings/models`)
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null);
+
+        const [modelsData, settingsData] = await Promise.all([
+          fetchModelsPromise,
+          fetchSettingsPromise
+        ]);
+
+        if (modelsData) {
+          const modelList: string[] = [];
+          if (Array.isArray(modelsData.models)) {
+            modelList.push(...modelsData.models);
+          } else if (Array.isArray(modelsData.providers)) {
+            for (const p of modelsData.providers) {
+              if (p?.models && typeof p.models === 'object') {
+                for (const mId of Object.keys(p.models)) {
+                  modelList.push(`${p.id}/${mId}`);
+                }
+              }
+            }
+          }
+          if (modelList.length > 0) {
+            setModels(modelList);
+            try {
+              localStorage.setItem('af-models-cache', JSON.stringify({
+                models: modelList,
+                timestamp: Date.now()
+              }));
+            } catch {}
+          }
+        }
+
+        if (settingsData) {
           setOrchestratorModel(settingsData.orchestratorModel || '');
           setDefaultSubagentModel(settingsData.defaultSubagentModel || '');
           setAgentModelOverrides(settingsData.agentModelOverrides || {});
@@ -122,7 +166,7 @@ export function ModelSettingsDialog({ agents, onClose, onSaved }: Props) {
         agentModelOverrides
       };
 
-      const res = await fetch('/api/settings/models', {
+      const res = await fetch(`${API}/api/settings/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

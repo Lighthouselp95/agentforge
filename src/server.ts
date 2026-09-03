@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer } from 'http';
 import net from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { exec, execSync, spawn } from 'child_process';
@@ -62,7 +62,7 @@ console.warn = (...args: any[]) => {
 };
 
 const __dirname = dirname(fileURLToPath(new URL('.', import.meta.url)));
-const APP_VERSION = '6.22.0';
+const APP_VERSION = '6.31.6';
 const PORT = parseInt(process.env.PORT || '4001');
 
 // SEA early: phai khai bao TRUOC loadPrompt de exe copy 1 file van doc duoc src/prompts nhung trong blob
@@ -279,9 +279,11 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
   orchestrator: 'Main Orchestrator of AgentForge'
 };
 
-function syncOpencodeAgents() {
+function syncOpencodeAgents(targetProjectDir?: string) {
   try {
-    mkdirSync(OPENCODE_AGENTS_DIR, { recursive: true });
+    const isCustomDir = !!(targetProjectDir && resolve(targetProjectDir) !== resolve(SERVER_PROJECT_ROOT));
+    const agentsDir = isCustomDir ? join(targetProjectDir, '.opencode', 'agents') : OPENCODE_AGENTS_DIR;
+    mkdirSync(agentsDir, { recursive: true });
     
     // Load Base Rules & Formats
     const workerBase = loadPrompt('worker-base.md') || '';
@@ -316,8 +318,8 @@ permission:
 
 ${orchPrompt}
 `;
-    writeFileSync(join(OPENCODE_AGENTS_DIR, 'orchestrator.md'), orchAgentContent, 'utf-8');
-    console.log(`[SSoT] Synced .opencode/agents/orchestrator.md`);
+    writeFileSync(join(agentsDir, 'orchestrator.md'), orchAgentContent, 'utf-8');
+    console.log(`[SSoT] Synced ${isCustomDir ? join(targetProjectDir!, '.opencode', 'agents') : '.opencode/agents'}/orchestrator.md`);
 
     // 2. Sync all worker roles
     const standardRoles = Object.keys(ROLE_DESCRIPTIONS).filter(r => r !== 'orchestrator');
@@ -347,11 +349,11 @@ ${rolePrompt ? rolePrompt : `# Role: ${role}\nYou are the ${role} specialist wor
 
 ${formatsSection}
 `;
-      writeFileSync(join(OPENCODE_AGENTS_DIR, `${role}.md`), fullPrompt, 'utf-8');
-      console.log(`[SSoT] Synced .opencode/agents/${role}.md`);
+      writeFileSync(join(agentsDir, `${role}.md`), fullPrompt, 'utf-8');
+      console.log(`[SSoT] Synced ${isCustomDir ? join(targetProjectDir!, '.opencode', 'agents') : '.opencode/agents'}/${role}.md`);
     }
   } catch (err: any) {
-    console.warn(`[SSoT] Failed to sync .opencode/agents: ${err.message}`);
+    console.warn(`[SSoT] Failed to sync .opencode/agents${targetProjectDir ? ` in ${targetProjectDir}` : ''}: ${err.message}`);
   }
 }
 
@@ -575,26 +577,31 @@ function loadState() {
       const agent: Agent = {
         id: row.id, name: row.name, role: row.role, type: row.type,
         status: keepWorking ? 'working' : (row.status === 'working' ? 'idle' : row.status),
-        spawnedBy: row.spawned_by, projectDir: row.project_dir, 
-        teamId: row.teamId || row.team_id || 'default',
+        spawnedBy: row.spawnedBy || row.spawned_by || undefined,
+        projectDir: row.projectDir || row.project_dir || SERVER_PROJECT_ROOT, 
+        teamId: row.teamId || row.team_id || (row.type === 'orchestrator' ? (row.id === 'orchestrator' ? 'default' : `team-${row.id.slice(-8)}`) : 'default'),
         model: row.model || undefined,
-        sessionId: row.session_id || undefined,
-        sessionTitle: row.session_title ? String(row.session_title).normalize('NFC') : undefined,
+        sessionId: row.session_id || row.sessionId || undefined,
+        sessionTitle: row.session_title ? String(row.session_title).normalize('NFC') : (row.sessionTitle ? String(row.sessionTitle).normalize('NFC') : undefined),
         task: row.task ? String(row.task).normalize('NFC') : undefined,
         tasks: rowTasks,
-        createdAt: row.created_at, workingSince: keepWorking ? (row.workingSince || row.working_since || Date.now()) : undefined,
-        tokenUsage: row.token_usage || undefined,
-        contextLength: row.context_length || undefined
+        createdAt: row.created_at || row.createdAt || Date.now(), workingSince: keepWorking ? (row.workingSince || row.working_since || Date.now()) : undefined,
+        tokenUsage: row.token_usage || row.tokenUsage || undefined,
+        contextLength: row.context_length || row.contextLength || undefined
       };
       agents.set(agent.id, agent);
       // Collect session entries for restoring agentSessions static map for all agents
-      if (row.session_id && row.id) {
-        sessionEntries.push({ agentId: row.id, sessionId: row.session_id });
+      const sid = row.session_id || row.sessionId;
+      if (sid && row.id) {
+        sessionEntries.push({ agentId: row.id, sessionId: sid });
       }
     }
     // Restore ACPClient.agentSessions map for all agents
     ACPClient.restoreAgentSessions(sessionEntries);
-    if (!agents.has('orchestrator')) {
+    
+    // Mọi Orchestrator đều ngang hàng: CHỈ tạo orchestrator khởi đầu nếu DB hoàn toàn chưa có bất kỳ agent nào
+    const hasAnyOrchestrator = Array.from(agents.values()).some(a => a.type === 'orchestrator' || a.role === 'orchestrator');
+    if (savedAgents.length === 0 && !hasAnyOrchestrator) {
       const storedOrch = storage.getAgent('orchestrator');
       const keepOrchWorking = autoContinue && storedOrch?.status === 'working';
       const savedOrchModel = storage.getSetting('orchestratorModel', process.env.ORCHESTRATOR_MODEL);
@@ -615,7 +622,8 @@ function loadState() {
         tasks: orchTasks,
         sessionId: storedOrch?.sessionId,
         sessionTitle: storedOrch?.sessionTitle,
-        model: savedOrchModel ? String(savedOrchModel).trim() : undefined
+        model: savedOrchModel ? String(savedOrchModel).trim() : undefined,
+        teamId: storedOrch?.teamId || 'default'
       };
       agents.set('orchestrator', orch);
       storage.saveAgent(orch);
@@ -735,6 +743,146 @@ function stripAnsi(text: any): string {
   return text.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-NPRZcf-nqry=><]/g, '');
 }
 
+// ============ EARLY DISPATCH IN STREAM (server-dedup / ui-render-dup design) ============
+// Mục tiêu: dispatch lệnh <talk>/<spawn> NGAY trong luồng streaming thay vì chờ process close.
+// Giảm độ trễ delivery: target agent bắt đầu làm việc sớm hơn (không chờ turn đầy đủ kết thúc).
+//
+// CẢNH BÁO DOUBLE-DISPATCH: cùng một lệnh vẫn xuất hiện trong full content mà final pass
+// (handleAgentResponse) parse lại → nếu dispatch sớm MÀ KHÔNG dedup → nhân đôi delivery.
+// Giải pháp: lưu `dispatchedCmdSigs` (signature chuẩn hoá của talk đã dispatch sớm), final pass
+// sẽ SKIP những talk đã có signature này. Signature dựa trên (from > target | task | message)
+// chuẩn hoá whitespace → KHỚP giữa stream buffer và full content bất kể chunk-boundary khác nhau.
+//
+// PHẠM VI dispatch sớm: CHỈ talk hướng tới AGENT KHÁC (non-orchestrator, non-user).
+// - talk→orchestrator / talk→user / broadcast: giữ nguyên final pass (triggerOrchestrator / user route).
+// - spawn: KHÔNG dispatch sớm (orchestrator-only, có role-limit/reuse logic phức tạp) → giữ final pass.
+// - stop/resume/delete/task_update: giữ final pass (parseAgentCommands).
+const dispatchTextBuf: Record<string, string> = {};
+// Signature theo TỪNG agent gửi (fromAgentId → Set<sig>): giúp (a) không nhầm lẫn giữa các agent
+// stream song song, (b) xoá đúng sig của agent khi turn kết thúc → không chặn nhầm talk trùng lặp
+// ở turn SAU (cùng agent gửi lại nội dung giống hệt), tránh mất delivery.
+const dispatchedCmdSigs: Map<string, Set<string>> = new Map();
+
+// ============ OUTBOX CONTENT DEDUP WORKER↔WORKER ============
+// Chặn duplicate message trong outbox khi deliverTalk worker↔worker (root cause report lặp 3-4 lần).
+// 7 call-site nest route cùng nội dung → có thể enqueue uuidv4 MỚI nhiều lần. Guard ngay đầu
+// deliverTalk chặn nếu cùng content gửi tới cùng agent trong cửa sổ ngắn.
+const OUTBOX_DELIVER_TALK_DEDUP_MS = 2000; // 2s
+const deliverTalkDedup = new Map<string, number>();
+// Chặn buffer phình vô hạn khi turn bị dừng giữa chừng (agent stopped → handleAgentResponse không
+// drain). Cắt từ ĐẦU giữ phần CUỐI (lệnh dispatch thường xuất hiện cuối output).
+const MAX_DISPATCH_BUF = 200_000;
+
+// FIX 2 — DEDUP SPAWN theo signature (role+name+task normalized). Trong cùng 1 response của
+// orchestration, model có thể emit lệnh <spawn> đồng signature nhiều lần; Set này chặn xử lý
+// lệnh spawn trùng signature để tránh SPAWN lặp / SPAWN_ROLE_LIMIT spam. Được clear ở ĐẦU mỗi
+// lần handleOrchestratorResponse (mỗi response = 1 turn orchestration riêng) nên không chặn nhầm
+// spawn hợp lệ ở turn sau.
+const handledSpawnSigs: Set<string> = new Set();
+
+/** Signature chuẩn hoá của 1 lệnh spawn (role+name+task) — dedup trong phạm vi 1 response. */
+function spawnDispatchSig(role: string, name: string, task: string): string {
+  return `spawn|${normCmdSigPart(role)}|${normCmdSigPart(name)}|${normCmdSigPart(task)}`;
+}
+
+/** Chuẩn hoá whitespace cho signature dedup — khớp giữa stream buffer và full content. */
+function normCmdSigPart(v: string): string {
+  return (v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** Signature của 1 talk (fromAgent > target | task | message) — dùng cả 2 phía stream + final. */
+function talkDispatchSig(fromAgentId: string, to: string, task: string | undefined, message: string): string {
+  return `talk|${normCmdSigPart(fromAgentId)}>${normCmdSigPart(to)}|${normCmdSigPart(task || '')}|${normCmdSigPart(message)}`;
+}
+
+/**
+ * Quét buffer stream của agent, phát hiện lệnh <talk>/[TALK] HOÀN CHỈNH hướng tới agent khác
+ * và dispatch sớm qua deliverTalk. Trả về buffer còn lại (đã loại bỏ lệnh đã dispatch).
+ * Chỉ trả về phần text CHƯA phải lệnh hoàn chỉnh; lệnh hoàn chỉnh được dispatch + ghi signature.
+ */
+function scanStreamForDispatch(agentId: string, accumulated: string): string {
+  if (!accumulated || !accumulated.trim()) return accumulated;
+  const fromAgent = agents.get(agentId);
+  if (!fromAgent) return accumulated;
+
+  // 1. Trích lệnh TALK hoàn chỉnh (bracket + xml), bỏ qua tag trong code block/quoted.
+  // extractDualCommands CHỈ trả về lệnh cân bằng ngoặc / cặp thẻ đóng-mở đầy đủ → an toàn với buffer partial.
+  const talks = extractDualCommands(accumulated, ['TALK']);
+  let remaining = accumulated;
+  let changed = false;
+
+  for (const cmd of talks) {
+    if (cmd.tag.toUpperCase() !== 'TALK') continue;
+    // Bỏ qua TALK nằm trong code block giữa buffer (đề phòng inline) — extractDualCommands đã loại.
+    const parsed = parseTalkCommand(cmd);
+    if (!parsed || !parsed.agentId) continue;
+
+    // ══ FIX 1: Chặn dispatch talk XML chưa hoàn chỉnh (partial/unclosed) ══
+    // nhánh "Unclosed XML tag fallback" trong extractXmlCommand (L2223-2238) có thể trả về talk
+    // PARTIAL (fullMatch kéo dài tới next command/EOF khi buffer chưa đủ <talk>...</talk>).
+    // Dispatch vội + xóa buffer (split(fullMatch).join('')) sẽ NUỐT talk thứ 2 phía sau.
+    // CHỈ dispatch khi tag XML ĐÃ hoàn chỉnh: self-closing (kết thúc "/>") HOẶC có closing tag
+    // ("</talk>"). Còn lại (unclosed kéo dài tới next cmd/EOF) = partial → chờ buffer đủ rồi mới dispatch.
+    if (cmd.syntax === 'xml' && !/\/>(\s*)$/.test(cmd.fullMatch || '') && !/<\/talk>\s*$/i.test(cmd.fullMatch || '')) {
+      console.log(`[StreamDispatch] SKIP partial talk target=${parsed.agentId || '?'} (chưa có closing tag) — chờ buffer đủ.`);
+      continue;
+    }
+
+    const cleanTo = cleanTargetIdentifier(parsed.agentId);
+    if (!cleanTo || cleanTo.toLowerCase() === 'orchestrator' || cleanTo.toLowerCase() === 'main' || cleanTo.toLowerCase() === 'user') {
+      // talk→orchestrator / user / broadcast: KHÔNG dispatch sớm — giữ final pass.
+      continue;
+    }
+    const targetAgent = findAgentByIdNameOrRole(cleanTo);
+    if (!targetAgent) {
+      // Target chưa tồn tại → không dispatch sớm (final pass sẽ forward TALK_AGENT_NOT_FOUND).
+      continue;
+    }
+    if (targetAgent.type === 'orchestrator' || targetAgent.id === 'orchestrator') {
+      continue; // orchestrator không dispatch sớm — triggerOrchestrator ở final pass.
+    }
+    const task = parsed.task;
+    const message = parsed.message || '';
+    const sig = talkDispatchSig(fromAgent.id, targetAgent.id, task, message);
+    if (dispatchedCmdSigs.get(fromAgent.id)?.has(sig)) continue; // đã dispatch sớm rồi → tránh trùng lặp trong stream.
+
+    // Dispatch sớm: status working + broadcast + deliverTalk (giống final pass, NHƯNG sớm hơn).
+    try {
+      targetAgent.status = 'working';
+      targetAgent.workingSince = Date.now();
+      storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
+      broadcast('agent:updated', { agent: targetAgent });
+      deliverTalk(targetAgent, fromAgent, { to: targetAgent.id, message, task }).catch((err: any) => {
+        console.error(`[StreamDispatch] deliverTalk failed (${fromAgent.name}->${targetAgent.name}): ${err?.message || err}`);
+      });
+      if (!dispatchedCmdSigs.has(fromAgent.id)) dispatchedCmdSigs.set(fromAgent.id, new Set());
+      dispatchedCmdSigs.get(fromAgent.id)!.add(sig);
+      console.log(`[StreamDispatch] Early dispatched talk ${fromAgent.name} -> ${targetAgent.name} (during stream)`);
+    } catch (e: any) {
+      console.error(`[StreamDispatch] Early dispatch error: ${e?.message || e}`);
+    }
+
+    // Loại lệnh đã dispatch khỏi buffer → không quét lại lần sau.
+    // ══ FIX 2: chỉ xóa 1 bản đầu (replace). KHÔNG dùng split(fullMatch).join('') toàn cục —
+    // nếu fullMatch xuất hiện lần nữa (talk thứ 2 trùng nội dung) sẽ bị xóa sạch → nuốt talk.
+    if (cmd.fullMatch) {
+      remaining = remaining.replace(cmd.fullMatch, '');
+      changed = true;
+    }
+  }
+
+  // Dồn lại buffer để tránh phình vô hạn khi nhiều lệnh hoàn chỉnh đã bị loại.
+  return changed ? remaining : accumulated;
+}
+
+/** Reset buffer + signature của 1 agent — gọi khi final pass đã xử lý xong content (drain buffer).
+ *  Xoá CHỈ state của agent này; không đụng các agent stream song song khác.
+ */
+function drainDispatchState(agentId: string): void {
+  delete dispatchTextBuf[agentId];
+  dispatchedCmdSigs.delete(agentId);
+}
+
 function broadcastOACEvent(agentId: string, ev: any) {
   try {
     // Tách RỜI lời thoại và toolcall: content CHỈ chứa lời thoại,
@@ -745,7 +893,7 @@ function broadcastOACEvent(agentId: string, ev: any) {
     let allowThinking = false;
     // Option C: parts giữ ĐÚNG THỨ TỰ opencode emit (text + tool xen kẽ) trong batch này.
     // Client render interleaved qua msg.parts; khi không cần xen kẽ (chỉ text / chỉ tool) → bỏ parts.
-    const parts: Array<{ type: 'text' | 'tool'; content?: string; tool?: string; input?: any; output?: any }> = [];
+    const parts: Array<{ type: 'text' | 'tool' | 'thinking'; content?: string; tool?: string; input?: any; output?: any }> = [];
     let partsHasText = false;
     let partsHasTool = false;
     const asText = (v: any): string | undefined => {
@@ -778,6 +926,18 @@ function broadcastOACEvent(agentId: string, ev: any) {
           textLines.push(e.part.text);
           parts.push({ type: 'text', content: e.part.text });
           partsHasText = true;
+          // EARLY DISPATCH: tích luỹ text RAW vào buffer theo agent. Text chunk có thể nằm
+          // xen kẽ/tách rời giữa nhiều batch, nên buffer tích dần; scanStreamForDispatch chỉ
+          // dispatch lệnh HOÀN CHỈNH (<talk>...</talk> / [TALK ...]) và chỉ cho target khác.
+          // GHÉP BẰNG '\n' (giống parseJsonlEvents join parts) để signature body khớp chính xác
+          // với final content kể cả khi 1 lệnh trải nhiều text part.
+          const rawPart = String(e.part.text || '');
+          dispatchTextBuf[agentId] = dispatchTextBuf[agentId]
+            ? `${dispatchTextBuf[agentId]}\n${rawPart}`
+            : rawPart;
+          if (dispatchTextBuf[agentId].length > MAX_DISPATCH_BUF) {
+            dispatchTextBuf[agentId] = dispatchTextBuf[agentId].slice(-MAX_DISPATCH_BUF);
+          }
         } else if (isTool) {
           const p = e.part || {};
           const st: any = p.state || {};
@@ -809,6 +969,8 @@ function broadcastOACEvent(agentId: string, ev: any) {
           const rt = e.part?.text || e.text || e.part?.thinking || e.thinking;
           if (typeof rt === 'string' && rt.trim()) {
             evThinking += (evThinking ? '\n' : '') + rt;
+            // Option A — push thinking vào parts để giữ thứ tự realtime (client render từ parts thay vì fixed-top)
+            parts.push({ type: 'thinking', content: rt });
             // REALTIME THINKING: broadcast NGAY từng khúc reasoning lên UI (fix debugroot —
             // trước đây chỉ gom vào evThinking rồi gửi trong snapshot CUỐI → user thấy text trước,
             // thinking sau, dù model emit reasoning trước). UI upsertStreamMsg cùng key với text
@@ -837,6 +999,15 @@ function broadcastOACEvent(agentId: string, ev: any) {
         }
       }
     }
+    // EARLY DISPATCH: quét buffer stream sau mỗi batch (chỉ khi agent tồn tại) — phát hiện
+    // lệnh <talk>/[TALK] hoàn chỉnh hướng tới agent khác và dispatch sớm qua deliverTalk.
+    try {
+      if (dispatchTextBuf[agentId]) {
+        dispatchTextBuf[agentId] = scanStreamForDispatch(agentId, dispatchTextBuf[agentId]);
+      }
+    } catch (e: any) {
+      console.error(`[StreamDispatch] scan error: ${e?.message || e}`);
+    }
     if (textLines.length === 0 && toolCalls.length === 0 && !evThinking) return;
 
     // LIVE STREAM: text từ stdio được gửi dạng chat:chunk để UI gộp vào 1 bubble đang chạy
@@ -851,6 +1022,16 @@ function broadcastOACEvent(agentId: string, ev: any) {
         from: agentId,
         to: agentId,
         textDelta: strippedDelta || '', // nếu strip hết thì gửi rỗng để UI không giữ raw
+        teamId: agents.get(agentId)?.teamId || 'default'
+      });
+    }
+
+    // REALTIME TOOL INTERLEAVE: broadcast chat:tool_call NGAY khi tool arrive
+    for (const tc of toolCalls) {
+      broadcast('chat:tool_call', {
+        agentId,
+        from: agentId,
+        toolCall: tc,
         teamId: agents.get(agentId)?.teamId || 'default'
       });
     }
@@ -870,10 +1051,12 @@ function broadcastOACEvent(agentId: string, ev: any) {
       // Fix interleave 6.44 (rework 6.33): GIỮ text + tool trong parts theo ĐÚNG thứ tự emit
       // (KHÔNG còn lọc bỏ text) để UI render xen kẽ <text>/<tool> đúng vị trí. text không nhân đôi
       // vì client (a) ẩn Khối 2 + Khối 3 khi hasParts, (b) dedup canonical reply trùng nội dung
-      // trong agent view. Condition giữ nguyên (cần cả text+tool mới set parts) — tránh parts rỗng.
-      parts: (partsHasText && partsHasTool && parts.length > 0) ? parts : undefined
+      // trong agent view. RELAXED: chi can co it nhat 1 segment la set parts.
+      parts: (parts.length > 0) ? parts : undefined
     };
-    broadcast('chat:message', { msg });
+    // FIX #3 (bỏ render cuối): KHÔNG broadcast snapshot opencode ra UI nữa — đã live stream qua
+    // chat:chunk/chat:thinking/chat:tool_call ở trên. Snapshot chỉ còn dùng để PERSIST (restart recovery).
+    // Bubble cuối của agent vẫn hiện qua handleAgentResponse broadcast reply.
     // PERSIST snapshot opencode: trước đây chỉ broadcast (KHÔNG lưu) → restart bị mất thinking/toolCalls.
     // Client render thinking từ history (ChatPanel L2072-2083) nên phải lưu storage để phục hồi sau restart.
     // Giới hạn: UPSERT 1 bản mới nhất/agent (xóa bản opencode cũ cùng from) — không phình vô hạn
@@ -1036,24 +1219,42 @@ function resolveModelForAgent(agent: Agent): string | undefined {
     return resolveOrchestratorModel();
   }
   const overrides: Record<string, string> = storage.getSetting('agentModelOverrides', {});
-  // Priority 1: Agent direct model override or overrides map by id/name/role
+  // Hierarchy 6 tầng: agent card -> main card -> agent setting -> role setting -> default agent setting -> main setting
+  // 1) Agent card (trực tiếp trên Dashboard card)
   if (agent.model && agent.model.trim()) return agent.model.trim();
+  // 2) Main card — model của main orchestrator (kế thừa nếu worker chưa có card riêng)
+  //    Lưu ý: main card và main setting cùng key orchestratorModel, giữ để UI tách biệt nhưng logic gộp
+  //    Nếu muốn ưu tiên main card trước agent setting, lấy orchestratorModel ở đây.
+  //    Hiện giữ thứ tự user yêu cầu: agent card -> main card -> agent setting ...
+  const mainCardModel = resolveOrchestratorModel();
+  // Để tuân thủ đúng thứ tự user: agent card - main card - agent setting - role setting - default agent - main setting
+  // Ta kiểm tra main card NGAY SAU agent card, TRƯỚC agent setting chỉ khi worker chưa có setting riêng.
+  // Tuy nhiên nếu có agent setting/role setting thì chúng ưu tiên hơn main card → cần quyết định.
+  // Thực tế hiện tại: agent setting/role setting ưu tiên hơn main card sẽ hợp lý hơn, nên giữ fallback sau.
+  // Giữ nguyên thứ tự chuẩn: agent card -> agent setting -> role setting -> default agent -> main setting
+  // và main card được coi là alias của main setting (fallback cuối). Nếu bạn muốn main card ưu tiên hơn
+  // agent setting, hoán đổi 2 khối dưới.
+  // 3) Agent setting (ModelSettingsDialog -> agentModelOverrides[agentId])
   if (agent.id && overrides[agent.id]?.trim()) return overrides[agent.id].trim();
   if (agent.name && overrides[agent.name]?.trim()) return overrides[agent.name].trim();
+  // 4) Role setting (ModelSettingsDialog -> role:xxx)
   if (agent.role && overrides[`role:${agent.role}`]?.trim()) return overrides[`role:${agent.role}`].trim();
   if (agent.role && overrides[agent.role]?.trim()) return overrides[agent.role].trim();
-
-  // Priority 2: Default Subagent Model
+  
+  // 5) Default agent setting (ModelSettingsDialog -> defaultSubagentModel)
   const defSubagent = storage.getSetting('defaultSubagentModel', process.env.DEFAULT_SUBAGENT_MODEL);
   if (defSubagent && String(defSubagent).trim()) return String(defSubagent).trim();
-
-  // Priority 3: Default System Model (Orchestrator Model / Default Model)
-  const orchModel = resolveOrchestratorModel();
-  if (orchModel && orchModel.trim()) return orchModel.trim();
+  
+  // 6) Main setting (orchestratorModel / DEFAULT_MODEL)
+  if (mainCardModel && mainCardModel.trim()) return mainCardModel.trim();
   return process.env.DEFAULT_MODEL || undefined;
 }
 
 function getClient(agent: Agent): ACPClient {
+  if (agent.projectDir) {
+    syncOpencodeAgents(agent.projectDir);
+  }
+  // Mỗi lượt gọi đều resolve lại model theo hierarchy 6 tầng -> opencode run luôn đúng
   const model = resolveModelForAgent(agent);
   if (!clients.has(agent.id)) {
     const c = new ACPClient({ id: agent.id, name: agent.name, role: agent.role, type: 'worker', projectDir: agent.projectDir, model });
@@ -1072,7 +1273,8 @@ function getClient(agent: Agent): ACPClient {
     clients.set(agent.id, c);
   } else {
     const c = clients.get(agent.id)!;
-    if (model) c.setModel(model);
+    // Luôn cập nhật model mỗi lượt, kể cả khi model = undefined (clear để kế thừa)
+    c.setModel(model);
   }
   const client = clients.get(agent.id)!;
   if (client.getSessionId() !== (agent.sessionId || null)) {
@@ -1083,25 +1285,44 @@ function getClient(agent: Agent): ACPClient {
 
 // ============ TEAM CONTEXT VERSIONING ============
 // membershipVersion: CHỈ tăng khi SPAWN hoặc DELETE agent (thay đổi thành phần team).
-// Status đổi (idle/working/stopped) KHÔNG tăng version — chỉ hiển thị trên Dashboard UI, không bơm vào prompt.
+// ĐÃ TÁCH PER-TEAM: mỗi team có version riêng, tránh team A spawn làm team B bị inject [TEAM UPDATE] thừa.
+// Status đổi (idle/working/stopped) KHÔNG tăng version.
+const membershipVersionByTeam = new Map<string, number>();
+function getMembershipVersion(teamId: string): number { return membershipVersionByTeam.get(teamId || 'default') || 1; }
+function bumpMembershipVersion(teamId: string): void {
+  const tid = teamId || 'default';
+  membershipVersionByTeam.set(tid, getMembershipVersion(tid) + 1);
+}
+// Giữ biến global legacy cho tương thích đọc cũ (không dùng để so sánh nữa)
 let membershipVersion = 1;
 // lastTeamVersionDelivered: version [TEAM UPDATE] cuối cùng đã được inject cho từng agent.
-// Chỉ inject lại khi membershipVersion > lastTeamVersionDelivered[agentId].
 const lastTeamVersionDelivered = new Map<string, number>();
 
-function notifyTeamChanged() {
-  // CHỈ được gọi tại SPAWN (agents.set) hoặc DELETE agent — KHÔNG bao giờ tại status change.
-  membershipVersion++;
+function notifyTeamChanged(teamId?: string) {
+  // CHỈ được gọi tại SPAWN hoặc DELETE — teamId xác định team nào thay đổi.
+  if (teamId) {
+    bumpMembershipVersion(teamId);
+    membershipVersion++; // giữ đồng bộ legacy
+  } else {
+    // Fallback: bump tất cả team đang tồn tại (hiếm khi dùng, khi không biết teamId)
+    const teams = new Set(Array.from(agents.values()).map(a => a.teamId || 'default'));
+    for (const tid of teams) bumpMembershipVersion(tid);
+    if (teams.size === 0) bumpMembershipVersion('default');
+    membershipVersion++;
+  }
 }
 
 function shouldIncludeTeamContext(agentId: string, hasExplicitChange = false): boolean {
+  const agent = agents.get(agentId);
+  const tid = agent?.teamId || 'default';
+  const curVer = getMembershipVersion(tid);
   if (hasExplicitChange) {
-    lastTeamVersionDelivered.set(agentId, membershipVersion);
+    lastTeamVersionDelivered.set(agentId, curVer);
     return true;
   }
   const lastDelivered = lastTeamVersionDelivered.get(agentId) || 0;
-  if (lastDelivered < membershipVersion) {
-    lastTeamVersionDelivered.set(agentId, membershipVersion);
+  if (lastDelivered < curVer) {
+    lastTeamVersionDelivered.set(agentId, curVer);
     return true;
   }
   return false;
@@ -1143,10 +1364,12 @@ function formatAgentTasksSummary(a: Agent): string {
 function buildTeam(agentId: string, full: boolean = true): string {
   const self = agents.get(agentId);
   const isOrchestrator = self?.type === 'orchestrator' || agentId === 'orchestrator' || String(agentId || '').toLowerCase() === 'orchestrator' || self?.role === 'orchestrator';
-  // Liệt kê đầy đủ 100% tất cả agent (cả idle, working, stopped, error) kèm ID và name
+  // PER-TEAM: chỉ liệt kê agent cùng team với self (tránh main team thấy worker team khác)
+  const selfTeamId = self?.teamId || 'default';
   const others = Array.from(agents.values()).filter(a => {
     if (a.id === agentId) return false;
     if (a.id === 'orchestrator' || a.type === 'orchestrator') return false;
+    if ((a.teamId || 'default') !== selfTeamId) return false;
     return true;
   });
   const suffix = isOrchestrator ? '' : WORKER_FORMAT_BLOCK;
@@ -1237,7 +1460,8 @@ function stopAgent(id: string, stoppedBy: 'user' | 'orchestrator' | 'error' = 'u
     timestamp: Date.now(),
     agentName: a.name,
     agentRole: a.role,
-    msgType: msgType
+    msgType: msgType,
+    teamId: a.teamId || 'default'
   };
   chatHistory.push(stopMsg);
   storage.saveMessage(stopMsg);
@@ -1320,7 +1544,7 @@ WHAT I DID: <summary>
     agent.workingSince = undefined;
     storage.updateAgent(agent.id, { status: 'error', workingSince: null });
     broadcast('agent:updated', { agent });
-    const errMsg: ChatMsg = { id: uuidv4(), from: agent.id, to: 'orchestrator', content: `[ERROR] Agent ${agent.name} failed after resume: ${e.message}`, timestamp: Date.now(), agentName: agent.name, agentRole: agent.role };
+    const errMsg: ChatMsg = { id: uuidv4(), from: agent.id, to: 'orchestrator', content: `[ERROR] Agent ${agent.name} failed after resume: ${e.message}`, timestamp: Date.now(), agentName: agent.name, agentRole: agent.role, teamId: agent.teamId || 'default' };
     chatHistory.push(errMsg); storage.saveMessage(errMsg);
     addUnreadForOrchestrator(errMsg);
     broadcast('chat:message', { msg: errMsg });
@@ -1329,23 +1553,16 @@ WHAT I DID: <summary>
 }
 
 async function deleteAgent(id: string): Promise<boolean> {
-  if (id === 'orchestrator') {
-    throw new Error('Cannot delete main orchestrator agent');
-  }
+  // Xóa bất kỳ agent nào (kể cả Orchestrator) chỉ xóa chính bản thân agent đó.
+  // Các worker trong team vẫn được bảo toàn và team chỉ bị xóa khi tất cả thành viên trong team đều bị xóa.
+  return await deleteSingleAgentOnly(id);
+}
 
+async function deleteSingleAgentOnly(id: string): Promise<boolean> {
   const a = agents.get(id) || (storage.getAgent(id) as any);
   const client = clients.get(id);
 
-  // 1. Reassign any children workers of this orchestrator back to main orchestrator
-  for (const [, child] of agents) {
-    if (child.spawnedBy === id) {
-      child.spawnedBy = 'orchestrator';
-      storage.updateAgent(child.id, { spawnedBy: 'orchestrator' } as any);
-      broadcast('agent:updated', { agent: child });
-    }
-  }
-
-  // 2. Abort tiến trình con nếu đang chạy
+  // 1. Abort tiến trình con nếu đang chạy
   if (client) {
     try {
       client.abort();
@@ -1354,10 +1571,10 @@ async function deleteAgent(id: string): Promise<boolean> {
     }
   }
 
-  // 3. Xóa session mapping trong ACPClient
+  // 2. Xóa session mapping trong ACPClient
   ACPClient.unregisterSession(id);
 
-  // 4. Xóa dọn session trong OpenCode storage
+  // 3. Xóa dọn session trong OpenCode storage
   const sid = a?.sessionId || a?.session_id || (client ? client.getSessionId() : null);
   if (client) {
     try {
@@ -1375,10 +1592,10 @@ async function deleteAgent(id: string): Promise<boolean> {
     }
   }
 
-  // 5. Xóa toàn bộ conversation và transcript khỏi Database storage
+  // 4. Xóa toàn bộ conversation và transcript khỏi Database storage
   storage.clearAgentConversation(id);
 
-  // 6. Xóa tin nhắn khỏi bộ nhớ RAM chatHistory
+  // 5. Xóa tin nhắn khỏi bộ nhớ RAM chatHistory
   const remainingChat = chatHistory.filter(m => m.from !== id && m.to !== id);
   chatHistory.length = 0;
   chatHistory.push(...remainingChat);
@@ -1392,13 +1609,14 @@ async function deleteAgent(id: string): Promise<boolean> {
   // 7. Xóa toàn bộ agent khỏi Database storage
   storage.deleteAgent(id);
 
-  // 9. Xóa khỏi memory map
+  // 8. Xóa khỏi memory map
   clients.delete(id);
   agents.delete(id);
 
-  // 10. Broadcast sự kiện agent:deleted
+  // 9. Broadcast sự kiện agent:deleted — per-team
+  const deletedTeamId = a?.teamId || 'default';
   broadcast('agent:deleted', { id, agentId: id });
-  notifyTeamChanged();
+  notifyTeamChanged(deletedTeamId);
   console.log(`[Delete] ${a ? (a.name || a.role || id) : id} (${id}) — session and history cleaned up and removed`);
   return !!a;
 }
@@ -1418,15 +1636,21 @@ function getRoleLimit(role: string): number {
   return 2;
 }
 
-function getAgentsByRole(role: string): Agent[] {
+function getAgentsByRole(role: string, teamId?: string): Agent[] {
   const r = (role || '').toLowerCase().trim();
-  return Array.from(agents.values()).filter(a => a.type === 'worker' && a.id !== 'orchestrator' && (a.role || '').toLowerCase().trim() === r);
+  const tid = teamId ? String(teamId).trim() : undefined;
+  return Array.from(agents.values()).filter(a => {
+    if (a.type !== 'worker' || a.id === 'orchestrator') return false;
+    if ((a.role || '').toLowerCase().trim() !== r) return false;
+    if (tid && (a.teamId || 'default') !== tid) return false;
+    return true;
+  });
 }
 
-// Automatically delete the oldest agent of the role to free quota when spawning a new agent
-async function autoPruneExcessAgents(role: string): Promise<boolean> {
+// Automatically delete the oldest agent of the role to free quota when spawning a new agent (per-team)
+async function autoPruneExcessAgents(role: string, teamId?: string): Promise<boolean> {
   const limit = getRoleLimit(role);
-  const currentAgents = getAgentsByRole(role);
+  const currentAgents = getAgentsByRole(role, teamId);
   if (currentAgents.length > limit) {
     currentAgents.sort((a, b) => a.createdAt - b.createdAt);
     const numToDelete = currentAgents.length - limit;
@@ -1447,15 +1671,14 @@ const SYNTHESIZE_DEBOUNCE_MS = 1800; // 1.8s debounce cooldown gom tat ca worker
 function checkAndSynthesize(completedAgentId: string) {
   const completedAgent = agents.get(completedAgentId);
   if (!completedAgent) return;
-  const spawnedByOrch = Array.from(agents.values()).filter(a => a.spawnedBy === 'orchestrator');
+  // PER-TEAM: chỉ xét worker cùng team với completedAgent (tránh team A chờ team B)
+  const teamId = completedAgent.teamId || 'default';
+  const spawnedByOrch = Array.from(agents.values()).filter(a => a.spawnedBy === 'orchestrator' && (a.teamId || 'default') === teamId);
   if (spawnedByOrch.length === 0) return;
   const allDone = spawnedByOrch.every(a => a.status === 'idle' || a.status === 'error');
   if (!allDone) return;
 
-  // FIX DUP ORCHESTRATOR (Option A): Đánh dấu batch này đang chờ synthesis NGAY (trước
-  // debounce timer), để processOrchestratorTriggerQueue (fire 1.5s, sớm hơn synthesis 1.8s)
-  // biết batch sẽ có summary → KHÔNG broadcast bubble per-report trùng → mỗi batch hoàn
-  // thành chỉ 1 message orchestrator→user. Flag xóa khi synthesis broadcast xong.
+  // FIX DUP ORCHESTRATOR (Option A): Đánh dấu batch này đang chờ synthesis NGAY
   markBatchAwaitingSynthesis(spawnedByOrch.map(a => a.id));
   
   // Reset previous debounce timer if new agents are finishing
@@ -1466,7 +1689,8 @@ function checkAndSynthesize(completedAgentId: string) {
 
   synthesizeDebounceTimer = setTimeout(async () => {
     synthesizeDebounceTimer = null;
-    const currentSpawned = Array.from(agents.values()).filter(a => a.spawnedBy === 'orchestrator');
+    // PER-TEAM: dùng teamId đã capture từ completedAgent
+    const currentSpawned = Array.from(agents.values()).filter(a => a.spawnedBy === 'orchestrator' && (a.teamId || 'default') === teamId);
     if (currentSpawned.length === 0) return;
     const stillAllDone = currentSpawned.every(a => a.status === 'idle' || a.status === 'error');
     if (!stillAllDone) return;
@@ -1525,6 +1749,7 @@ function checkAndSynthesize(completedAgentId: string) {
           timestamp: Date.now(),
           agentName: 'Orchestrator',
           agentRole: 'orchestrator',
+          teamId: synthOrchAgent?.teamId || 'default',
           msgType: isInternal ? 'orchestrator_internal' : undefined,
           showOnUI: !isInternal,
           ...((result as any).thinking ? { thinking: (result as any).thinking } : {})
@@ -1542,10 +1767,14 @@ function checkAndSynthesize(completedAgentId: string) {
         }
       }
       await handleOrchestratorResponse(result.content, (result as any).thinking || '');
-      // FIX DUP ORCHESTRATOR (Option A): synthesis đã broadcast summary xong → xóa flag batch
-      // để agent cùng batch, turn MỚI sau này vẫn broadcast bình thường (không chặn nhầm).
+      // FIX DUP ORCHESTRATOR (Option A) + ROOT-CAUSE FIX (outbox loop):
+      // synthesis đã broadcast summary xong → xóa flag batch để agent cùng batch, turn MỚI sau này
+      // vẫn broadcast bình thường. Đồng thời xóa synthesisTriggered — nếu không, batch agent này
+      // hoàn thành turn MỚI vẫn bị L1629 has(batchKey) chặn → "[Synthesize] Already triggered"
+      // lặp vô hạn, không tổng hợp lại → outbox report ứ đọng → "[Outbox] Replaying N" retry vô hạn.
       if (currentSpawned.length > 0) {
         synthesisPendingBatches.delete(currentSpawned.map(a => a.id).sort().join(','));
+        synthesisTriggered.delete(currentSpawned.map(a => a.id).sort().join(','));
       }
     } catch (e: any) {
       console.log(`[Synthesize] Error: ${e.message}`);
@@ -1746,7 +1975,7 @@ Cú pháp đúng:
 
     storage.updateAgent(target.id, updates as any);
     broadcast('agent:updated', { agent: target });
-    notifyTeamChanged();
+    notifyTeamChanged(target.teamId || 'default');
     results.push(`Updated task for ${target.name} (${target.id}): task="${target.task || ''}", status="${target.status}", totalTasks=${target.tasks.length}`);
   }
 
@@ -1978,7 +2207,7 @@ function extractBracketCommand(text: string, startIndex: number): { tag: string;
  */
 function extractXmlCommand(text: string, startIndex: number, targetTag: string): BracketCommand | null {
   const normTag = targetTag.toLowerCase().replace(/[\s_-]+/g, '[-_\\s]?');
-  const openPattern = new RegExp(`^<(${normTag})(?:\\s+[^>]*)?(?:>|\\/>)`, 'i');
+  const openPattern = new RegExp(`^<(${normTag})(?:\\s+(?:[^>"']|"[^"]*"|'[^']*')*)?(?:>|\\/>)`, 'i');
   const match = text.substring(startIndex).match(openPattern);
   if (!match) return null;
 
@@ -2340,10 +2569,17 @@ function parseTalkCommand(cmd: BracketCommand): { agentId: string; message: stri
 
     // Message can be body or message attribute
     let message = cmd.body || '';
-    if (!task && message) {
+    if (task && message) {
       const taskTagMatch = message.match(/<task>([\s\S]*?)<\/task>/i);
       if (taskTagMatch) {
         task = taskTagMatch[1].trim();
+        message = message.replace(/<task>[\s\S]*?<\/task>/i, '').trim();
+      }
+    }
+    if (!task && message) {
+      const taskTagMatch2 = message.match(/<task>([\s\S]*?)<\/task>/i);
+      if (taskTagMatch2) {
+        task = taskTagMatch2[1].trim();
         message = message.replace(/<task>[\s\S]*?<\/task>/i, '').trim();
       }
     }
@@ -2413,10 +2649,15 @@ function parseAgentOutput(content: string, defaultTo: string = 'orchestrator'): 
     }
     const cleanCandidate = cleanTargetIdentifier(m[1]);
     const rawTarget = (m[1] || '').trim();
-    if (INVALID_TARGET_PLACEHOLDERS.has(rawTarget.toLowerCase()) || /^<.*>$/.test(rawTarget) || !cleanCandidate) {
-      if (rawTarget.toLowerCase() !== 'orchestrator' && rawTarget.toLowerCase() !== 'user' && rawTarget.toLowerCase() !== 'main') {
-        continue; // Skip placeholder tag like [TO: <coder-id>]
-      }
+    const cleanLower = (cleanCandidate || '').toLowerCase();
+    // Special routing keywords cho phép bất kỳ format nào (orchestrator/user/main/all/broadcast)
+    const isSpecialRoute = cleanLower === 'orchestrator' || cleanLower === 'user' || cleanLower === 'main' || cleanLower === 'all' || cleanLower === 'broadcast';
+    // STRICT VALIDATION (fix mất tin): target phải là agent-id/name hợp lệ (chỉ chữ-số-underscore-dash).
+    // Chặn regex-fragment như '\s*([^' lọt vào làm target → sinh TALK_AGENT_NOT_FOUND sai + mất tin định tuyến.
+    const isValidId = /^[A-Za-z0-9_-]+$/.test(cleanCandidate);
+    const isPlaceholder = INVALID_TARGET_PLACEHOLDERS.has(cleanLower) || /^<.*>$/.test(rawTarget) || !cleanCandidate || !isValidId;
+    if (isPlaceholder && !isSpecialRoute) {
+      continue; // Skip placeholder/invalid/đoạn regex-fragment như [TO: '\s*([^' ]
     }
     tagMatches.push({
       index: m.index,
@@ -2524,13 +2765,20 @@ function parseSpawnCommand(cmd: BracketCommand): { role: string; name: string; t
     const role = cleanTargetIdentifier(roleMatch ? (roleMatch[1] || roleMatch[2] || roleMatch[3] || roleMatch[4]) : '').toLowerCase();
     const name = cleanTargetIdentifier(nameMatch ? (nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4]) : '');
     let task = stripQuotes(taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4]) : '');
-    if (!task && cmd.body) {
+    let bodyContent = '';
+    if (cmd.body) {
       const taskTagMatch = cmd.body.match(/<task>([\s\S]*?)<\/task>/i);
       if (taskTagMatch) {
-        task = taskTagMatch[1].trim();
+        if (!task) task = taskTagMatch[1].trim();
+        bodyContent = cmd.body.replace(/<task>[\s\S]*?<\/task>/i, '').trim();
       } else {
-        task = cmd.body.trim();
+        bodyContent = cmd.body.trim();
       }
+    }
+    if (task && bodyContent) {
+      task = `${task} — ${bodyContent}`;
+    } else if (!task && bodyContent) {
+      task = bodyContent;
     }
 
     if (role && name && task && !INVALID_PLACEHOLDERS.has(role) && !INVALID_PLACEHOLDERS.has(name.toLowerCase())) {
@@ -2735,7 +2983,7 @@ async function processOrchestratorTriggerQueue() {
 
     let orchAgent = agents.get(orchId);
     if (!orchAgent) {
-      orchAgent = { id: orchId, name: (orchId === 'orchestrator' ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'idle', createdAt: Date.now() };
+      orchAgent = { id: orchId, name: (orchId === 'orchestrator' ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'idle', createdAt: Date.now(), teamId: (orchId === 'orchestrator' ? 'default' : `team-${orchId.slice(-8)}`) };
       agents.set(orchId, orchAgent);
     }
     updateOrchStateSafe(orchId, 'working', 'Đang tổng hợp báo cáo & điều phối');
@@ -2754,8 +3002,11 @@ async function processOrchestratorTriggerQueue() {
     }
     
     try {
+      // ACK-based: đánh dấu in_flight TRƯỚC enqueue — nếu enqueue thất bại, record không bị
+      // markDelivered sớm → vòng quét định kỳ sẽ retry (không mất report).
+      for (const item of batch) storage.markOutboxInFlight(item.reportId);
       const result = await client.enqueue(prompt);
-      // Đánh dấu mọi report trong batch đã gửi thành công (xóa khỏi outbox)
+      // Đánh dấu mọi report trong batch đã gửi thành công — CHỈ sau khi enqueue resolve (client ACK)
       for (const item of batch) storage.markOutboxDelivered(item.reportId);
       const sid = client.getSessionId();
       if (orchAgent) {
@@ -2795,6 +3046,7 @@ async function processOrchestratorTriggerQueue() {
           timestamp: Date.now(),
           agentName: orchAgent.name || 'Orchestrator',
           agentRole: 'orchestrator',
+          teamId: orchAgent.teamId || 'default',
           msgType: isInternal ? 'orchestrator_internal' : undefined,
           showOnUI: !isInternal,
           ...((result as any).thinking ? { thinking: (result as any).thinking } : {})
@@ -2813,7 +3065,7 @@ async function processOrchestratorTriggerQueue() {
         }
       }
       
-      await handleOrchestratorResponse(result.content, (result as any).thinking || '');
+      await handleOrchestratorResponse(result.content, (result as any).thinking || '', orchId);
     } catch (e: any) {
       console.log(`[Orchestrator Trigger] Error: ${e.message}`);
       // Lỗi Abort: xóa khỏi Outbox NGAY, không retry (chống vòng lặp spam lỗi aborted)
@@ -2964,6 +3216,7 @@ if (messages.length === 0 && content && content.trim()) {
       timestamp: Date.now(),
       agentName: fromAgent.name,
       agentRole: fromAgent.role,
+      teamId: fromAgent.teamId || 'default',
       // msgType phản ánh NGƯỜI GỬI, không phải đích (fix arch-dbg):
       // - orchestrator_internal CHỈ khi NGƯỜI GỬI là orchestrator (planning nội bộ, ẩn trong khung worker).
       // - worker gửi báo cáo cho orchestrator dùng 'talk' (hoặc undefined nếu to user/broadcast) —
@@ -3012,7 +3265,10 @@ if (messages.length === 0 && content && content.trim()) {
     } else {
       const targetAgent = agents.get(resolvedTo) || findAgentByIdNameOrRole(resolvedTo);
       if (targetAgent) {
-        if (targetAgent.type === 'orchestrator') {
+        // FIX A: cho phép secondary orchestrator (role='orchestrator', type có thể là 'worker').
+        // Nếu chỉ nhận type==='orchestrator', secondary được spawn với type:'worker' sẽ rơi vào
+        // nhánh deliverTalk → handleAgentResponse (KHÔNG parse spawn) → <spawn> bị loại im lặng.
+        if (targetAgent.type === 'orchestrator' || targetAgent.role === 'orchestrator') {
           hasOrchestratorMessage = true;
           updateOrchStateSafe(resolvedTo, 'working', `Đang tiếp nhận & tổng kết báo cáo từ ${fromAgent.name}`);
           await triggerOrchestrator(fromAgent, safeOutContent);
@@ -3021,7 +3277,15 @@ if (messages.length === 0 && content && content.trim()) {
           targetAgent.workingSince = Date.now();
           storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
           broadcast('agent:updated', { agent: targetAgent });
-          deliverTalk(targetAgent, fromAgent, { to: resolvedTo, message: msg.message, task: msg.task });
+          // EARLY DISPATCH DEDUP: nếu talk này đã được dispatch SỚM trong luồng stream
+          // (cùng from>target|task|message signature), thì KHÔNG deliverTalk lại lần 2 —
+          // tránh nhân đôi delivery khi final pass chạy. UI bubble vẫn được broadcast ở trên.
+          const earlySig = talkDispatchSig(fromAgent.id, targetAgent.id, msg.task, msg.message);
+          if (dispatchedCmdSigs.get(fromAgent.id)?.has(earlySig)) {
+            console.log(`[StreamDispatch] Skip final deliverTalk (already early-dispatched): ${fromAgent.name} -> ${targetAgent.name}`);
+          } else {
+            deliverTalk(targetAgent, fromAgent, { to: resolvedTo, message: msg.message, task: msg.task });
+          }
         }
       } else {
         if (msg.to !== 'user' && msg.to !== 'orchestrator' && msg.to !== 'broadcast') {
@@ -3054,11 +3318,41 @@ Nội dung tin nhắn gửi về Orchestrator
       await triggerOrchestrator(fromAgent, rawReport);
     }
   }
+
+  // Drain buffer stream: turn của agent này đã kết thúc, xoá buffer đã tích luỹ để không phình bộ nhớ.
+  drainDispatchState(fromAgent.id);
 }
 
 // Gửi tin nhắn TALK từ fromAgent → targetAgent, bền vững qua outbox.
 // existingReportId dùng khi replay để không sinh bản trùng.
 async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: string; message: string; task?: string }, existingReportId?: string) {
+  // === OUTBOX CONTENT DEDUP WORKER↔WORKER ===
+  // Prevent duplicate enqueue when same content sent to same agent within 2s window.
+  // Root cause report lặp 3-4 lần: 7 call-site nest route cùng nội dung → enqueue uuidv4 MỚI nhiều lần.
+  // Guard này CHỈ áp dụng cho giao worker↔worker (KHÔNG target orchestrator/user/broadcast) và
+  // KHÔNG áp dụng khi replay outbox (existingReportId) — replay là delivery chính đáng, không dedup.
+  const applyDedup = !existingReportId
+    && msg.to !== 'orchestrator' && msg.to !== 'user' && msg.to !== 'broadcast'
+    && fromAgent.role !== 'orchestrator' && targetAgent.role !== 'orchestrator';
+  if (applyDedup) {
+    const dedupKey = `${fromAgent.id}->${targetAgent.id}::${normCmdSigPart(msg.message)}`;
+    const now = Date.now();
+    const lastSent = deliverTalkDedup.get(dedupKey);
+    if (lastSent !== undefined && (now - lastSent) < OUTBOX_DELIVER_TALK_DEDUP_MS) {
+      console.log(`[OutboxDedup] Skip duplicate deliverTalk ${fromAgent.id}->${targetAgent.id} within ${OUTBOX_DELIVER_TALK_DEDUP_MS}ms: ${dedupKey.slice(0, 80)}`);
+      // Deduplicate: skip enqueue hoàn toàn (không gửi trùng). Không persist outbox record mới.
+      return;
+    }
+    deliverTalkDedup.set(dedupKey, now);
+    // Clean old entries periodically để map không phình vô hạn
+    if (deliverTalkDedup.size > 1000) {
+      const cutoff = now - OUTBOX_DELIVER_TALK_DEDUP_MS * 2;
+      for (const [k, t] of deliverTalkDedup) {
+        if (t < cutoff) deliverTalkDedup.delete(k);
+      }
+    }
+  }
+
   const reportId = existingReportId || uuidv4();
   if (!existingReportId) {
     storage.enqueueOutbox({
@@ -3113,6 +3407,9 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
     targetAgent.workingSince = Date.now();
     storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
     broadcast('agent:updated', { agent: targetAgent });
+
+    // ACK-based: đánh dấu in_flight TRƯỚC enqueue — delivered CHỈ sau khi enqueue thành công (client ACK)
+    storage.markOutboxInFlight(reportId);
 
     const tr = await tc.enqueue(talkPrompt);
     const newSid = tc.getSessionId();
@@ -3188,7 +3485,8 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
       storage.markOutboxDelivered(reportId);
     } else {
       storage.markOutboxFailed(reportId, e.message);
-      const rec = storage.getPendingOutbox().find(r => r.id === reportId);
+      // Dùng getOutboxRecord để tìm bất kể trạng thái (record đã bị set 'failed')
+      const rec = storage.getOutboxRecord?.(reportId) || storage.getPendingOutbox().find(r => r.id === reportId);
       if (rec && rec.attempts < ORCH_MAX_RETRY) {
         setTimeout(() => deliverTalk(targetAgent, fromAgent, msg, reportId).catch(() => {}), 2000 * rec.attempts);
       }
@@ -3201,7 +3499,10 @@ async function deliverTalk(targetAgent: Agent, fromAgent: Agent, msg: { to: stri
   }
 }
 
-async function handleOrchestratorResponse(response: string, extraScanText = ''): Promise<string[]> {
+async function handleOrchestratorResponse(response: string, extraScanText = '', orchId = 'orchestrator'): Promise<string[]> {
+  // FIX 2 — Clear dedup-spawn-set ở ĐẦU mỗi lần xử lý 1 response: dedup CHỈ trong phạm vi 1 response
+  // (spawn lặp trong cùng 1 output), không chặn nhầm spawn hợp lệ ở turn/response khác.
+  handledSpawnSigs.clear();
   const commandResults: string[] = [];
   let cmdResults: string[] = [];
   try {
@@ -3211,14 +3512,32 @@ async function handleOrchestratorResponse(response: string, extraScanText = ''):
   }
   commandResults.push(...cmdResults);
 
-  // SPAWN scan gộp cả thinking/reasoning: tag có thể nằm trong phần model tự nói (không nằm
-  // ở final text của opencode) — trước đây chỉ parse response nên spawn im lặng thất bại.
+  // SPAWN scan: CHỈ scan trong RESPONSE THẬT (không scan thinking/extraScanText).
+  // FIX 3 — chặn parse spawn trong thinking: `extraScanText=thinking` trước đây tái kích hoạt lệnh
+  // spawn cũ nằm trong nội dung reasoning/model tự nói (gây SPAWN lặp / ROLE_LIMIT spam). Suy nghĩ
+  // của model (thinking/reasoning) KHÔNG phải lệnh điều phối — bỏ qua hoàn toàn, không spawn, không lỗi.
   // extractBracketCommands (gọi bởi parseSpawnTags) skip tag nằm trong fenced/inline code/report/
-  // quoted attrs qua getCodeSpanRanges + isInCodeSpan → dùng raw text an toàn, không cần sanitize.
+  // quoted attrs qua getCodeSpanRanges + isInCodeSpan → dùng raw response an toàn, không cần sanitize.
   // Tag trong blockquote mô tả (target/role placeholder) sẽ lọt parse nhưng bị bỏ qua im lặng vì
   // cleanTargetIdentifier không tìm thấy agent / parseSpawnCommand trả null — không thành lệnh thật.
-  const scanText = response + '\n' + (extraScanText || '');
+  const scanText = response; // FIX 3: không gộp extraScanText (thinking) vào scan spawn.
   const spawns = parseSpawnTags(scanText);
+
+  // FIX 2 — DEDUP SPAWN theo signature (role+name+task normalized). Trong cùng 1 response, model
+  // có thể emit nhiều <spawn> đồng signature (đặc biệt khi response lặp qua cả stream-dispatch lẫn
+  // full-parse) → loại bỏ lệnh trùng để ngăn SPAWN_ROLE_LIMIT/ROLE_LIMIT spam. Set được clear ở đầu
+  // hàm (mỗi response = 1 turn), nên chỉ dedup trong phạm vi response hiện tại, không chặn lệnh hợp lệ.
+  const dedupedSpawns: typeof spawns = [];
+  for (const spawn of spawns) {
+    const ssig = spawnDispatchSig(spawn.role, spawn.name, spawn.task);
+    if (handledSpawnSigs.has(ssig)) {
+      console.log(`[SpawnDedup] Skip duplicate spawn (role=${spawn.role} name=${spawn.name}) — đã xử lý trong turn này.`);
+      continue;
+    }
+    handledSpawnSigs.add(ssig);
+    dedupedSpawns.push(spawn);
+  }
+  const effectiveSpawns = dedupedSpawns;
   
   // Nếu có chuỗi [SPAWN role=...] nhưng parse thất bại (thiếu name hoặc task), chỉ cảnh báo nhẹ console,
   // tuyệt đối KHÔNG bắn tin nhắn lỗi spam về Orchestrator nếu chỉ là câu văn tự sự/ví dụ.
@@ -3243,7 +3562,20 @@ Cú pháp đúng:
     }
   }
 
-  for (const spawn of spawns) {
+  // TASK LENGTH WARNING + EMPTY TASK GUARDRAIL (chỉ trên spawns đã dedup)
+  for (const spawn of effectiveSpawns) {
+    if (!spawn.task || !spawn.task.trim()) {
+      forwardToOrchestrator('SPAWN_EMPTY_TASK', `[ERROR] Agent "${spawn.name}" (role: ${spawn.role}) khong co task. Can cung cap task description.`);
+      effectiveSpawns.splice(effectiveSpawns.indexOf(spawn), 1);
+      continue;
+    }
+    const wordCount = spawn.task.trim().split(/\s+/).length;
+    if (wordCount > 20) {
+      forwardToOrchestrator('SPAWN_TASK_LONG', `[WARN] Task "${spawn.name}" co ${wordCount} tu (>20). Nen tom gon 20 tu.`);
+    }
+  }
+
+  for (const spawn of effectiveSpawns) {
      const { role, name, task } = spawn;
      const existing = findAgentByName(name);
      if (existing) {
@@ -3282,7 +3614,8 @@ Cú pháp đúng:
         timestamp: Date.now(),
         agentName: 'Orchestrator',
         agentRole: 'orchestrator',
-        msgType: 'talk'
+        msgType: 'talk',
+        teamId: existing.teamId || 'default'
       };
       chatHistory.push(reuseTaskMsg);
       storage.saveMessage(reuseTaskMsg);
@@ -3335,7 +3668,7 @@ Cú pháp đúng:
           existing.workingSince = undefined;
           storage.updateAgent(existing.id, { status: 'error', workingSince: null });
           broadcast('agent:updated', { agent: existing });
-          const errMsg: ChatMsg = { id: uuidv4(), from: existing.id, to: 'orchestrator', content: `[ERROR] Agent ${existing.name} failed on first turn: ${e.message}`, timestamp: Date.now(), agentName: existing.name, agentRole: existing.role };
+          const errMsg: ChatMsg = { id: uuidv4(), from: existing.id, to: 'orchestrator', content: `[ERROR] Agent ${existing.name} failed on first turn: ${e.message}`, timestamp: Date.now(), agentName: existing.name, agentRole: existing.role, teamId: existing.teamId || 'default' };
           chatHistory.push(errMsg); storage.saveMessage(errMsg);
           addUnreadForOrchestrator(errMsg);
           broadcast('chat:message', { msg: errMsg });
@@ -3343,18 +3676,19 @@ Cú pháp đúng:
         }
       }, 100);
     } else {
-      // 1. Kiểm tra bất thường: nếu > 2 con thì tự động xóa bớt 1 con bất kỳ
-      await autoPruneExcessAgents(role);
+      // 1. Kiểm tra bất thường: nếu vượt trần TEAM thì tự động xóa bớt (per-team)
+      const spawnTeamId = agents.get(orchId)?.teamId || 'default';
+      await autoPruneExcessAgents(role, spawnTeamId);
 
-      // 2. Kiểm tra hạn mức role: coder/researcher tối đa 2, các role khác tối đa 1
+      // 2. Kiểm tra hạn mức role theo TEAM (coder 4/team, role khác 2/team)
       const roleLimit = getRoleLimit(role);
-      const activeRoleAgents = getAgentsByRole(role);
+      const activeRoleAgents = getAgentsByRole(role, spawnTeamId);
 
       if (activeRoleAgents.length >= roleLimit) {
         const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
         const firstAgentId = activeRoleAgents[0]?.id || 'agent-id';
         const errorContent = `[ERROR: SPAWN_ROLE_LIMIT]
-Lý do: Đã đạt giới hạn tối đa cho vai trò '${role}' (hiện có ${activeRoleAgents.length}/${roleLimit} active: [${existingListStr}]).
+Lý do: Đã đạt giới hạn tối đa cho vai trò '${role}' trong team '${spawnTeamId}' (hiện có ${activeRoleAgents.length}/${roleLimit} active: [${existingListStr}]).
 Cú pháp đúng: Tái sử dụng agent hiện có bằng cách gửi tin nhắn:
 <talk target="${firstAgentId}">
 Nội dung phân công nhiệm vụ mới tại đây
@@ -3371,7 +3705,8 @@ Nội dung phân công nhiệm vụ mới tại đây
           content: errorContent,
           timestamp: Date.now(),
           agentName: 'System',
-          agentRole: 'system'
+          agentRole: 'system',
+          teamId: agents.get(orchId)?.teamId || 'default'
         };
         chatHistory.push(limitErrMsgUser);
         storage.saveMessage(limitErrMsgUser);
@@ -3380,26 +3715,30 @@ Nội dung phân công nhiệm vụ mới tại đây
       }
 
       const spawnId = 'agent-' + uuidv4().slice(0, 8);
+      const parentOrch = agents.get(orchId);
+      // Tạm thời: dùng cwd làm projectDir cho mọi worker (sau này mới thêm tính năng prjDir)
+      const cwdProjectDir = SERVER_PROJECT_ROOT;
       const na: Agent = {
         id: spawnId, name, role, type: 'worker', status: 'working',
-        spawnedBy: 'orchestrator', task, teamId: 'default', createdAt: Date.now(), workingSince: Date.now(),
+        spawnedBy: orchId, task, teamId: parentOrch?.teamId || 'default', projectDir: cwdProjectDir, createdAt: Date.now(), workingSince: Date.now(),
         tasks: task ? [{ id: '1', task, status: 'working', createdAt: Date.now() }] : [],
         sessionTitle: task ? task.substring(0, 80) : undefined
       };
       agents.set(spawnId, na);
       storage.saveAgent(na);
       broadcast('agent:created', { agent: na });
-      notifyTeamChanged(); // Agent mới được thêm vào team → cần update context
+      notifyTeamChanged(na.teamId || 'default'); // per-team
       
       const spawnTaskMsg: ChatMsg = {
         id: uuidv4(),
-        from: 'orchestrator',
+        from: orchId,
         to: spawnId,
         content: `[SPAWN] ${role} "${name}" assigned: ${task}`,
         timestamp: Date.now(),
-        agentName: 'Orchestrator',
+        agentName: orchId === 'orchestrator' ? 'Orchestrator' : (agents.get(orchId)?.name || orchId),
         agentRole: 'orchestrator',
-        msgType: 'talk'
+        msgType: 'talk',
+        teamId: na.teamId || 'default'
       };
       chatHistory.push(spawnTaskMsg);
       storage.saveMessage(spawnTaskMsg);
@@ -3452,7 +3791,7 @@ Nội dung phân công nhiệm vụ mới tại đây
           na.workingSince = undefined;
           storage.updateAgent(na.id, { status: 'error', workingSince: null });
           broadcast('agent:updated', { agent: na });
-          const errMsg: ChatMsg = { id: uuidv4(), from: na.id, to: 'orchestrator', content: `[ERROR] Agent ${na.name} failed on first turn: ${e.message}`, timestamp: Date.now(), agentName: name, agentRole: role };
+          const errMsg: ChatMsg = { id: uuidv4(), from: na.id, to: 'orchestrator', content: `[ERROR] Agent ${na.name} failed on first turn: ${e.message}`, timestamp: Date.now(), agentName: name, agentRole: role, teamId: na.teamId || 'default' };
           chatHistory.push(errMsg); storage.saveMessage(errMsg);
           addUnreadForOrchestrator(errMsg);
           broadcast('chat:message', { msg: errMsg });
@@ -3474,6 +3813,14 @@ Nội dung phân công nhiệm vụ mới tại đây
       // Agent not found — likely a TALK example/placeholder in report text.
       // Skip silently to avoid error spam. Only log to console.
       console.warn(`[TALK] Skipped: agent "${agentId}" not found (likely example in report text)`);
+      continue;
+    }
+    // EARLY DISPATCH DEDUP (orchestrator path): nếu talk này đã được dispatch SỚM trong luồng
+    // stream (Orchestrator cũng stream qua broadcastOACEvent, scanStreamForDispatch bắt talk
+    // hướng agent khác) → SKIP toàn bộ block tái-dispatch để tránh nhân đôi delivery.
+    const earlySigOrch = talkDispatchSig('orchestrator', ta.id, task, message);
+    if (dispatchedCmdSigs.get('orchestrator')?.has(earlySigOrch)) {
+      console.log(`[StreamDispatch] Skip orchestrator final talk (already early-dispatched): -> ${ta.name}`);
       continue;
     }
     ta.status = 'working';
@@ -3508,7 +3855,8 @@ Nội dung phân công nhiệm vụ mới tại đây
       timestamp: Date.now(),
       agentName: 'Orchestrator',
       agentRole: 'orchestrator',
-      msgType: 'talk'
+      msgType: 'talk',
+      teamId: ta.teamId || 'default'
     };
     chatHistory.push(talkMsg);
     storage.saveMessage(talkMsg);
@@ -3565,7 +3913,7 @@ Nội dung phân công nhiệm vụ mới tại đây
         broadcast('agent:updated', { agent: ta });
         // KHÔNG nuốt lỗi: báo về orchestrator để main được wake và biết agent gặp sự cố
         try {
-          const errMsg: ChatMsg = { id: uuidv4(), from: ta.id, to: 'orchestrator', content: `[ERROR] Agent ${ta.name} (${ta.role}) turn failed: ${e.message}`, timestamp: Date.now(), agentName: ta.name, agentRole: ta.role };
+          const errMsg: ChatMsg = { id: uuidv4(), from: ta.id, to: 'orchestrator', content: `[ERROR] Agent ${ta.name} (${ta.role}) turn failed: ${e.message}`, timestamp: Date.now(), agentName: ta.name, agentRole: ta.role, teamId: ta.teamId || 'default' };
           chatHistory.push(errMsg); storage.saveMessage(errMsg);
           addUnreadForOrchestrator(errMsg);
           broadcast('chat:message', { msg: errMsg });
@@ -3582,6 +3930,9 @@ Nội dung phân công nhiệm vụ mới tại đây
 function getOrchClient(orchId: string = 'orchestrator'): ACPClient {
   const isMain = orchId === 'orchestrator';
   const targetAgent = agents.get(orchId) || (storage.getAgent(orchId) as any);
+  if (targetAgent?.projectDir) {
+    syncOpencodeAgents(targetAgent.projectDir);
+  }
   const model = isMain ? resolveOrchestratorModel() : resolveModelForAgent(targetAgent || { id: orchId, name: 'Orchestrator', role: 'orchestrator', type: 'orchestrator', createdAt: Date.now() });
   if (!clients.has(orchId)) {
     const c = new ACPClient({
@@ -3596,7 +3947,7 @@ function getOrchClient(orchId: string = 'orchestrator'): ACPClient {
     c.setOnStatusChange((busy) => {
       let orch = agents.get(orchId);
       if (!orch) {
-        orch = { id: orchId, name: (isMain ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'idle', createdAt: Date.now() };
+        orch = { id: orchId, name: (isMain ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'idle', createdAt: Date.now(), teamId: (isMain ? 'default' : `team-${orchId.slice(-8)}`) };
         agents.set(orchId, orch);
       }
       const newStatus = busy ? 'working' : 'idle';
@@ -3609,7 +3960,8 @@ function getOrchClient(orchId: string = 'orchestrator'): ACPClient {
     clients.set(orchId, c);
   } else {
     const c = clients.get(orchId)!;
-    if (model) c.setModel(model);
+    // Mỗi lượt gọi đều refresh model, kể cả undefined để fallback đúng hierarchy
+    c.setModel(model);
   }
   const client = clients.get(orchId)!;
   if (targetAgent && client.getSessionId() !== (targetAgent.sessionId || null)) {
@@ -3661,18 +4013,18 @@ app.post('/api/agents', async (req, res) => {
   const newTeamId = isOrch ? (teamId || `team-${uuidv4().slice(0, 8)}`) : (teamId || parentTeamId);
 
   if (!isOrch) {
-    // 1. Kiểm tra bất thường: nếu > 2 con thì tự động xóa bớt 1 con bất kỳ
-    await autoPruneExcessAgents(role);
+    // 1. Kiểm tra bất thường: nếu vượt trần TEAM thì tự động xóa bớt (per-team)
+    await autoPruneExcessAgents(role, newTeamId);
 
-    // 2. Kiểm tra hạn mức role: coder/researcher tối đa 2 con, các role khác tối đa 1 con
+    // 2. Kiểm tra hạn mức role theo TEAM (coder 4/team, role khác 2/team)
     const roleLimit = getRoleLimit(role);
-    const activeRoleAgents = getAgentsByRole(role);
+    const activeRoleAgents = getAgentsByRole(role, newTeamId);
 
     if (activeRoleAgents.length >= roleLimit) {
       const existingListStr = activeRoleAgents.map(a => `${a.name} (${a.id})`).join(', ');
       const firstAgentId = activeRoleAgents[0]?.id || 'agent-id';
       const errorMsg = `[ERROR: CREATE_ROLE_LIMIT]
-Lý do: Đã đạt giới hạn tối đa cho vai trò '${role}' (hiện có ${activeRoleAgents.length}/${roleLimit} active: [${existingListStr}]).
+Lý do: Đã đạt giới hạn tối đa cho vai trò '${role}' trong team '${newTeamId}' (hiện có ${activeRoleAgents.length}/${roleLimit} active: [${existingListStr}]).
 Cú pháp đúng: Tái sử dụng agent hiện có bằng cách gửi tin nhắn:
 <talk target="${firstAgentId}">
 Nội dung phân công nhiệm vụ mới tại đây
@@ -3700,15 +4052,17 @@ Nội dung phân công nhiệm vụ mới tại đây
     }
   }
 
+  // Tạm thời: mọi agent đều dùng cwd làm projectDir (tính năng prjDir sẽ thêm sau)
+  const effectiveProjectDir = SERVER_PROJECT_ROOT;
   const id = 'agent-' + uuidv4().slice(0, 8);
   const agent: Agent = {
     id, name: name || (isOrch ? `Orchestrator-${id.slice(-4)}` : `Agent-${id.slice(-4)}`), role,
-    type, status: 'idle', spawnedBy, projectDir, task, model, teamId: newTeamId, createdAt: Date.now(), sessionId: undefined,
+    type, status: 'idle', spawnedBy, projectDir: effectiveProjectDir, task, model, teamId: newTeamId, createdAt: Date.now(), sessionId: undefined,
     tasks: task ? [{ id: '1', task, status: 'pending', createdAt: Date.now() }] : []
   };
   agents.set(id, agent); storage.saveAgent(agent);
   broadcast('agent:created', { agent });
-  notifyTeamChanged(); // Agent mới được thêm vào team
+  notifyTeamChanged(newTeamId); // per-team
   // Tạo tin nhắn đầu để user thấy ngay agent đã sẵn sàng
   const spawnMsg: ChatMsg = {
     id: uuidv4(), from: 'system', to: id, teamId: newTeamId,
@@ -3799,9 +4153,6 @@ app.post('/api/agents/:id/abort', (req, res) => {
 
 app.delete('/api/agents/:id', async (req, res) => {
   const { id } = req.params;
-  if (id === 'orchestrator') {
-    return res.status(400).json({ ok: false, error: 'Cannot delete orchestrator agent' });
-  }
   const exists = agents.has(id) || storage.getAgent(id);
   if (!exists) {
     return res.status(404).json({ ok: false, error: 'Agent not found' });
@@ -3845,9 +4196,105 @@ app.patch('/api/agents/:id', (req, res) => {
     // KHÔNG notifyTeamChanged() ở đây — task content không phải member change
   }
   
-  broadcast('agent:updated', { agent });
-  res.json({ ok: true, agent });
-});
+    broadcast('agent:updated', { agent });
+    res.json({ ok: true, agent });
+  });
+
+  // Delete a specific task from an agent, persist to storage, and shift succeeding task IDs down by 1
+  function handleDeleteAgentTask(req: express.Request, res: express.Response) {
+    const agentId = req.params.id;
+    const rawTaskId = req.params.taskId;
+    const agent = agents.get(agentId) || (storage.getAgent(agentId) as any);
+    if (!agent) {
+      return res.status(404).json({ ok: false, error: 'Agent not found' });
+    }
+
+    // 1. Đồng bộ cấu trúc agent.tasks nếu mảng rỗng nhưng agent.task có nội dung
+    if (!Array.isArray(agent.tasks) || agent.tasks.length === 0) {
+      if (agent.task && typeof agent.task === 'string' && agent.task.trim()) {
+        const lines = agent.task.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
+        agent.tasks = lines.map((l: string, idx: number) => {
+          const clean = l.replace(/^[-*•\d+.)#]\s*/, '').replace(/^#\d+\s*/, '').trim();
+          return {
+            id: String(idx + 1),
+            task: clean || l,
+            status: (agent.status === 'working' && idx === 0) ? 'working' : 'pending',
+            createdAt: Date.now()
+          };
+        });
+      } else {
+        agent.tasks = [];
+      }
+    }
+
+    if (agent.tasks.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Agent has no tasks to delete' });
+    }
+
+    // 2. Tìm index của task cần xóa (khớp theo task.id hoặc số thứ tự 1-based)
+    const targetNum = parseInt(rawTaskId, 10);
+    const removeIndex = agent.tasks.findIndex((t: any, idx: number) =>
+      t.id === rawTaskId || (!isNaN(targetNum) && (t.id === String(targetNum) || idx + 1 === targetNum))
+    );
+
+    if (removeIndex === -1) {
+      return res.status(404).json({ ok: false, error: `Task #${rawTaskId} not found` });
+    }
+
+    // Xóa phần tử task khỏi mảng
+    const [removedTask] = agent.tasks.splice(removeIndex, 1);
+
+    // 3. QUAN TRỌNG: Các task sau đó sẽ LÙI SỐ ID VỀ 1 LẦN (re-index lại 1, 2, 3...)
+    agent.tasks.forEach((t: any, idx: number) => {
+      const newId = String(idx + 1);
+      t.id = newId;
+      // Nếu text của task có gắn tiền tố # cũ, cập nhật lại số mới
+      if (/^#\d+\b/.test(t.task)) {
+        t.task = t.task.replace(/^#\d+/, `#${newId}`);
+      }
+    });
+
+    // 4. Cập nhật lại agent.task và status
+    if (agent.tasks.length === 0) {
+      agent.task = '';
+      if (agent.status === 'working') {
+        agent.status = 'idle';
+        agent.workingSince = undefined;
+      }
+    } else {
+      // Ưu tiên task working -> pending -> task đầu tiên còn lại
+      const activeTask = agent.tasks.find((t: any) => t.status === 'working')
+        || agent.tasks.find((t: any) => t.status === 'pending')
+        || agent.tasks[0];
+      agent.task = activeTask.task;
+    }
+
+    // 5. Cập nhật vào database / storage
+    storage.updateAgent(agent.id, {
+      task: agent.task,
+      tasks: agent.tasks,
+      status: agent.status,
+      workingSince: agent.workingSince ?? null
+    } as any);
+
+    // Đảm bảo đồng bộ Map agents
+    agents.set(agent.id, agent);
+
+    // 6. Broadcast sự kiện cập nhật realtime qua WebSocket
+    broadcast('agent:updated', { agent });
+
+    console.log(`[Tasks] Deleted task #${rawTaskId} from agent ${agent.name} (${agent.id}). Remaining: ${agent.tasks.length} tasks (re-indexed 1..${agent.tasks.length}).`);
+
+    return res.json({
+      ok: true,
+      deleted: removedTask,
+      agent,
+      tasks: agent.tasks
+    });
+  }
+
+  app.delete('/api/agents/:id/tasks/:taskId', handleDeleteAgentTask);
+  app.post('/api/agents/:id/tasks/:taskId/delete', handleDeleteAgentTask);
 
 // Update agent model
 app.post('/api/agents/:id/model', (req, res) => {
@@ -3882,17 +4329,20 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
   const { targetAgentId, rawMsg, isSlashCommand, isRetry } = params;
   let resolvedTargetId = targetAgentId || '';
   let targetAgent: Agent | null = (resolvedTargetId && resolvedTargetId !== 'orchestrator') ? (agents.get(resolvedTargetId) || findAgentByIdNameOrRole(resolvedTargetId) || null) : null;
-  let agentName = 'Orchestrator', agentRole = 'orchestrator';
+  const isOrchTarget = !targetAgent || targetAgent.role === 'orchestrator' || targetAgent.type === 'orchestrator' || resolvedTargetId === 'orchestrator';
+  const orchId = targetAgent ? targetAgent.id : (resolvedTargetId || 'orchestrator');
+  let agentName = targetAgent ? targetAgent.name : 'Orchestrator';
+  let agentRole = targetAgent ? targetAgent.role : 'orchestrator';
   let prompt: string;
   let sid: string | null = null;
-  const client = targetAgent ? getClient(targetAgent) : getOrchClient(resolvedTargetId || 'orchestrator');
+  const client = isOrchTarget ? getOrchClient(orchId) : getClient(targetAgent!);
   const commandResults: string[] = [];
 
   // ============ PRESERVE & AUTO-MERGE UNPROCESSED USER MESSAGES ============
   // Nếu lượt trước bị Stop / Abort mà còn tin nhắn chưa được xử lý,
   // tự động gộp toàn bộ tin cũ cùng tin mới vào lượt này để không bao giờ mất yêu cầu của người dùng.
   let effectiveMsg = rawMsg;
-  const targetKey = resolvedTargetId || 'orchestrator';
+  const targetKey = isOrchTarget ? orchId : (targetAgent ? targetAgent.id : (resolvedTargetId || 'orchestrator'));
   const storedOldMsgs = isRetry ? [] : storage.getUnprocessedMessages(targetKey);
   const clientOldPrompts = isRetry ? [] : client.getUnprocessedPrompts();
   const combinedOld = Array.from(new Set([...storedOldMsgs, ...clientOldPrompts])).filter(p => p && p.trim() && p.trim() !== rawMsg.trim());
@@ -3927,7 +4377,7 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     client.setNeedPromptReinject(false);
   }
 
-  if (targetAgent) {
+  if (!isOrchTarget && targetAgent) {
     agentName = targetAgent.name; agentRole = targetAgent.role;
     targetAgent.status = 'working'; targetAgent.workingSince = Date.now();
     storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
@@ -3946,7 +4396,6 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
       }
     }
   } else {
-    const orchId = resolvedTargetId || 'orchestrator';
     updateOrchStateSafe(orchId, 'working', 'Đang phân tích yêu cầu & phân rã bài toán');
 
     // Inject unread messages từ workers vào prompt (bỏ qua khi retry để không consume lại)
@@ -3969,7 +4418,7 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
   let finalPrompt = '';
   if (isSlashCommand) {
     finalPrompt = rawMsg;
-  } else if (targetAgent) {
+  } else if (!isOrchTarget && targetAgent) {
     finalPrompt = prompt + `\n\n${buildWorkerPrompt(targetAgent.role, targetAgent, !targetAgent.sessionId || shouldReinject)}`;
   } else {
     finalPrompt = prompt + ((client.getSessionId() && !shouldReinject) ? '' : `\n\n${ORCH_REMINDER}`);
@@ -3983,16 +4432,15 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
     const injectRes = await client.injectPromptAsync(finalPrompt);
     if (injectRes.success) {
       console.log(`[Inject] Injected prompt silently into session ${client.getSessionId()} (PID: ${injectRes.pid}) while main turn continues.`);
-      if (targetAgent) {
+      if (!isOrchTarget && targetAgent) {
         targetAgent.status = 'working';
         targetAgent.workingSince = targetAgent.workingSince || Date.now();
         storage.updateAgent(targetAgent.id, { status: 'working', workingSince: targetAgent.workingSince });
         broadcast('agent:updated', { agent: targetAgent });
       } else {
-        const orchId = resolvedTargetId || 'orchestrator';
         let orch = agents.get(orchId);
         if (!orch) {
-          orch = { id: orchId, name: (orchId === 'orchestrator' ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'working', createdAt: Date.now() };
+          orch = { id: orchId, name: (orchId === 'orchestrator' ? 'Orchestrator' : `Orchestrator-${orchId.slice(-4)}`), role: 'orchestrator', type: 'orchestrator', status: 'working', createdAt: Date.now(), teamId: (orchId === 'orchestrator' ? 'default' : `team-${orchId.slice(-8)}`) };
           agents.set(orchId, orch);
         }
         orch.status = 'working';
@@ -4012,7 +4460,7 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
   const result = await client.enqueue(finalPrompt);
   sid = client.getSessionId();
   if (sid) {
-    if (targetAgent) {
+    if (!isOrchTarget && targetAgent) {
       const isNewSession = targetAgent.sessionId !== sid;
       targetAgent.sessionId = sid;
       if (result.tokenUsage) {
@@ -4031,7 +4479,11 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         syncSessionTitle(targetAgent, client, 1, isNewSession).catch(() => {});
       }
     } else {
-      const orchAgent = agents.get('orchestrator');
+      let orchAgent = agents.get(orchId);
+      if (!orchAgent && orchId !== 'orchestrator') {
+        orchAgent = targetAgent || { id: orchId, name: agentName, role: 'orchestrator', type: 'orchestrator', status: 'working', createdAt: Date.now(), teamId: `team-${orchId.slice(-8)}` };
+        agents.set(orchId, orchAgent);
+      }
       if (orchAgent) {
         const isNewSession = orchAgent.sessionId !== sid;
         orchAgent.sessionId = sid;
@@ -4039,7 +4491,7 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
           orchAgent.tokenUsage = result.tokenUsage;
         }
         if (result.contextLength) orchAgent.contextLength = result.contextLength;
-        storage.updateAgent('orchestrator', {
+        storage.updateAgent(orchId, {
           sessionId: sid,
           tokenUsage: orchAgent.tokenUsage,
           contextLength: orchAgent.contextLength
@@ -4048,24 +4500,15 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
           syncSessionTitle(orchAgent, client, 1, isNewSession).catch(() => {});
         }
       }
-      ACPClient.registerSession('orchestrator', sid);
+      ACPClient.registerSession(orchId, sid);
     }
   }
 
   const response = result.content;
-  if (targetAgent) {
+  if (!isOrchTarget && targetAgent) {
     if (isSlashCommand) {
       let chatContent = response;
       let isInternal = false;
-      if (targetAgent.role === 'orchestrator') {
-        const stripped = stripCommandTags(response).trim();
-        if (stripped) {
-          chatContent = stripped;
-          isInternal = false;
-        } else {
-          isInternal = true;
-        }
-      }
       const reply: ChatMsg = {
         id: uuidv4(),
         from: targetAgent.id,
@@ -4076,6 +4519,7 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         timestamp: Date.now(),
         agentName: targetAgent.name,
         agentRole: targetAgent.role,
+        teamId: targetAgent.teamId || 'default',
         ...(result.toolCalls && result.toolCalls.length ? { toolCalls: result.toolCalls } : {}),
         ...(result.thinking ? { thinking: result.thinking } : {})
       };
@@ -4105,16 +4549,6 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
       } else {
         let chatContent = response;
         let isInternal = false;
-        if (targetAgent.role === 'orchestrator') {
-          const stripped = stripCommandTags(response).trim();
-          if (stripped) {
-            chatContent = stripped;
-            isInternal = false;
-          } else {
-            chatContent = '';
-            isInternal = true;
-          }
-        }
         const reply: ChatMsg = {
           id: uuidv4(),
           from: targetAgent.id,
@@ -4125,6 +4559,7 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
           timestamp: Date.now(),
           agentName: targetAgent.name,
           agentRole: targetAgent.role,
+          teamId: targetAgent.teamId || 'default',
           ...(result.toolCalls && result.toolCalls.length ? { toolCalls: result.toolCalls } : {}),
           ...(result.thinking ? { thinking: result.thinking } : {})
         };
@@ -4164,15 +4599,16 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
       const isInternal = !stripped;
       const aMsg: ChatMsg = {
         id: uuidv4(),
-        from: 'orchestrator',
+        from: orchId,
         to: 'user',
         content: stripped,
         timestamp: Date.now(),
-        agentName: 'Orchestrator',
-        agentRole: 'orchestrator',
+        agentName,
+        agentRole,
         msgType: isInternal ? 'orchestrator_internal' : undefined,
         showOnUI: !isInternal,
-...(result.thinking ? { thinking: result.thinking } : {})
+        teamId: agents.get(orchId)?.teamId || 'default',
+        ...(result.thinking ? { thinking: result.thinking } : {})
       };
       if (!isBroadcastDuplicate(broadcastDedupKey(aMsg))) {
         chatHistory.push(aMsg);
@@ -4188,10 +4624,11 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
       const stripped = stripCommandTags(response).trim();
       const isInternal = !stripped;
       const aMsg: ChatMsg = {
-        id: uuidv4(), from: 'orchestrator', to: 'user', content: stripped,
+        id: uuidv4(), from: orchId, to: 'user', content: stripped,
         timestamp: Date.now(), agentName, agentRole,
         msgType: isInternal ? 'orchestrator_internal' : undefined,
         showOnUI: !isInternal,
+        teamId: agents.get(orchId)?.teamId || 'default',
         ...(result.toolCalls && result.toolCalls.length ? { toolCalls: result.toolCalls } : {}),
         ...(result.thinking ? { thinking: result.thinking } : {})
       };
@@ -4200,10 +4637,11 @@ async function dispatchUserChat(params: { targetAgentId: string; rawMsg: string;
         broadcast('chat:message', { msg: aMsg });
       }
       // Chạy sau khi đã persist/broadcast text-user để các spawn/talk msg đứng sau text.
-      const commandResultsParse = await handleOrchestratorResponse(response, result.thinking || '');
+      const commandResultsParse = await handleOrchestratorResponse(response, result.thinking || '', orchId);
       commandResults.push(...commandResultsParse);
     }
-    const orchId = resolvedTargetId || 'orchestrator';
+    // Drain buffer stream của orchestrator — turn đã kết thúc.
+    drainDispatchState(orchId);
     updateOrchStateSafe(orchId, 'idle', 'Sẵn sàng');
   }
   return { response, sid, commands: commandResults };
@@ -4299,6 +4737,38 @@ function scheduleChatRetry() {
   if (chatRetryTimer) return;
   chatRetryTimer = setInterval(processChatRetryQueue, CHAT_RETRY_INTERVAL);
   chatRetryTimer.unref?.();
+}
+
+// ============ OUTBOX ACK-BASED RETRY QUEUE ============
+// Vòng quét định kỳ nhặt các record outbox status='pending'/'failed' (tới hạn nextAttemptAt)
+// hoặc 'in_flight' treo (quá timeout) để gửi lại. Không phụ thuộc restart server.
+const OUTBOX_RETRY_INTERVAL = 15000; // 15s
+let outboxRetryTimer: any = null;
+let outboxRetryRunning = false;
+// Anti-spam log: chỉ log lại khi bộ nhận dạng các record cần retry THAY ĐỔI so lần trước
+// (tránh log "[Outbox] Retry queue: N..." lặp vô nghĩa mỗi 15s khi record kẹt vĩnh viễn).
+let outboxLastLoggedSignature = '';
+
+async function processOutboxRetryQueue() {
+  if (outboxRetryRunning) return;
+  outboxRetryRunning = true;
+  try {
+    const pending = storage.getOutboxForRetry?.() || storage.getPendingOutbox();
+    if (!pending || pending.length === 0) return;
+    // Signature = danh sách id + trạng thái: chỉ log khi thay đổi
+    const sig = pending.map(r => `${r.id}:${r.status}:${r.attempts}`).join('|');
+    if (sig !== outboxLastLoggedSignature) {
+      console.log(`[Outbox] Retry queue: ${pending.length} pending/failed/in_flight record(s) to retry`);
+      outboxLastLoggedSignature = sig;
+    }
+    try { await replayPendingReports(); } catch (e: any) { console.error(`[Outbox] retry failed: ${e.message}`); }
+  } finally { outboxRetryRunning = false; }
+}
+
+function scheduleOutboxRetry() {
+  if (outboxRetryTimer) return;
+  outboxRetryTimer = setInterval(processOutboxRetryQueue, OUTBOX_RETRY_INTERVAL);
+  outboxRetryTimer.unref?.();
 }
 
 app.post('/api/chat', async (req, res) => {
@@ -4474,7 +4944,8 @@ app.post('/api/chat', async (req, res) => {
       timestamp: Date.now(),
       agentName: targetAgent ? targetAgent.name : 'Orchestrator',
       agentRole: targetAgent ? targetAgent.role : 'orchestrator',
-      msgType: 'error'
+      msgType: 'error',
+      teamId: targetAgent?.teamId || agents.get(fromId)?.teamId || 'default'
     };
     chatHistory.push(errorMsg);
     storage.saveMessage(errorMsg);
@@ -5243,7 +5714,7 @@ async function autoResumeWorkingAgents() {
             contextLength: orchAgent.contextLength
           });
           broadcast('agent:updated', { agent: orchAgent });
-          await handleOrchestratorResponse(result.content, (result as any).thinking || '');
+await handleOrchestratorResponse(result.content, (result as any).thinking || '');
         }).catch((err) => {
           console.error(`[AutoContinue] Failed to resume Orchestrator: ${err.message}`);
           orchAgent.status = 'idle';
@@ -5291,7 +5762,9 @@ async function autoResumeWorkingAgents() {
 }
 
 async function replayPendingReports() {
-  const pending = storage.getPendingOutbox();
+  // Sử dụng getOutboxForRetry() để bao gồm cả: pending (chưa gửi), failed (tới hạn retry),
+  // và in_flight treo (quá timeout) — hỗ trợ vòng quét định kỳ scheduleOutboxRetry().
+  const pending = storage.getOutboxForRetry?.() || storage.getPendingOutbox();
   if (pending.length === 0) return;
   // Idempotent Replay: loại bỏ các report đã được phát trong memory lifecycle hiện tại
   const unplayed = pending.filter(r => !deliveredReportIds.has(r.id));
@@ -5315,20 +5788,38 @@ async function replayPendingReports() {
   storage.resetOutboxAttempts(finalReplay.map(r => r.id));
   for (const r of finalReplay) {
     if (deliveredReportIds.has(r.id)) continue;
-    deliveredReportIds.add(r.id);
-    // Đánh dấu markOutboxDelivered(r.id) ngay khi bắt đầu tiến trình giao tin để tránh khoảng trống giao dịch nếu server sập đột ngột
-    storage.markOutboxDelivered(r.id);
+    // ACK-based: đánh dấu in_flight TRƯỚC khi bắt đầu giao tin. Delivered CHỈ đặt sau khi
+    // enqueue thành công — do chính triggerOrchestrator (processOrchestratorTriggerQueue) /
+    // deliverTalk xử lý (markOutboxDelivered sau ACK, markOutboxFailed khi lỗi). Việc mark
+    // delivered sớm tại đây (deliveredReportIds.add) sẽ LÀM MẤT report nếu enqueue thất bại
+    // giữa chừng → vòng quét định kỳ không nhặt lại được → log spam vô hạn.
+    // deliveredReportIds.add(r.id) CHỈ gọi SAU KHI record đã thực sự 'delivered'.
+    storage.markOutboxInFlight(r.id);
 
     const fromAgent = (agents.get(r.fromAgentId) || {
       id: r.fromAgentId, name: r.fromAgentName, role: r.fromAgentRole
     }) as Agent;
-    if (r.to === 'orchestrator') {
-      await triggerOrchestrator(fromAgent, r.message, r.id);
-    } else {
-      const target = agents.get(r.to) || findAgentByIdNameOrRole(r.to);
-      if (target) {
-        await deliverTalk(target, fromAgent, { to: r.to, message: r.message }, r.id);
+    try {
+      if (r.to === 'orchestrator') {
+        await triggerOrchestrator(fromAgent, r.message, r.id);
+      } else {
+        const target = agents.get(r.to) || findAgentByIdNameOrRole(r.to);
+        if (target) {
+          await deliverTalk(target, fromAgent, { to: r.to, message: r.message }, r.id);
+        } else {
+          // Target không tồn tại → không thể giao → đánh dấu delivered để tránh kẹt vĩnh viễn
+          console.log(`[Outbox] Target ${r.to} không tồn tại, đánh dấu delivered cho ${r.id}`);
+          storage.markOutboxDelivered(r.id);
+        }
       }
+      // Chỉ thêm vào deliveredReportIds khi record đã thực sự 'delivered' (ACK thành công)
+      const rec = storage.getOutboxRecord(r.id);
+      if (rec && rec.status === 'delivered') {
+        deliveredReportIds.add(r.id);
+      }
+    } catch (e: any) {
+      // Giao thất bại → KHÔNG thêm deliveredReportIds → vòng quét retry lại được
+      console.log(`[Outbox] Replay delivery failed for ${r.id}: ${e?.message || e}`);
     }
   }
   storage.pruneDeliveredOutbox();
@@ -5419,6 +5910,8 @@ function startServerWithPortFallback(port: number) {
       autoResumeWorkingAgents().catch(e => console.error(`[AutoContinue] Resume failed: ${e.message}`));
       processChatRetryQueue().catch(e => console.error(`[ChatQueue] Replay failed: ${e.message}`));
       scheduleChatRetry();
+      // ACK-based: vòng quét định kỳ retry các report failed/in_flight treo khi mạng khôi phục
+      scheduleOutboxRetry();
     }, 1000);
   });
 }

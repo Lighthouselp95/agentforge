@@ -40,9 +40,10 @@ export function SpawnDialog({ onAdd, onClose, agents = [], defaultSpawnedBy }: P
     if (defaultSpawnedBy) setSpawnedBy(defaultSpawnedBy);
   }, [defaultSpawnedBy]);
 
+  const API = window.location.port === '5173' ? '' : (window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:4001');
   useEffect(() => {
     setLoadingModels(true);
-    fetch('/api/models')
+    fetch(`${API}/api/models`)
       .then(r => r.json())
       .then(data => {
         if (data.models) setModels(data.models);

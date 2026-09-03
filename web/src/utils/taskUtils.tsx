@@ -1,9 +1,16 @@
 ﻿import React from 'react';
 
 export interface ParsedAgentTask {
+  id?: string;
   num: number;
   status: 'working' | 'pending' | 'completed' | 'blocked';
   text: string;
+}
+
+export interface RenderAgentTaskOptions {
+  agentId?: string;
+  onDeleteTask?: (taskId: string | number, taskNum: number) => void;
+  deletingTaskId?: string | number | null;
 }
 
 /**
@@ -33,6 +40,7 @@ export function parseAgentTaskList(ag?: {
       const clean = String(t.task || '').replace(/^#\d+\s*/, '').trim();
       if (clean) {
         result.push({
+          id: t.id ? String(t.id) : String(idx + 1),
           num: idx + 1,
           status: st,
           text: clean
@@ -69,6 +77,7 @@ export function parseAgentTaskList(ag?: {
       cleanText = cleanText.replace(/^[-*•\d+.)#]\s*/, '').replace(/^#\d+\s*/, '').trim();
       if (cleanText) {
         result.push({
+          id: String(count),
           num: count++,
           status,
           text: cleanText
@@ -80,7 +89,10 @@ export function parseAgentTaskList(ag?: {
   return result;
 }
 
-export function renderAgentTaskList(tasks?: ParsedAgentTask[]): React.ReactNode {
+export function renderAgentTaskList(
+  tasks?: ParsedAgentTask[],
+  options?: RenderAgentTaskOptions
+): React.ReactNode {
   if (!Array.isArray(tasks) || tasks.length === 0) return null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -94,9 +106,11 @@ export function renderAgentTaskList(tasks?: ParsedAgentTask[]): React.ReactNode 
         const tColor = isComp ? '#6ee7b7' : isWork ? '#93c5fd' : isBlk ? '#fca5a5' : '#94a3b8';
         const tBg = isWork ? 'rgba(59, 130, 246, 0.12)' : isComp ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.03)';
 
+        const isDeleting = options?.deletingTaskId !== undefined && options?.deletingTaskId !== null && (options.deletingTaskId === t.id || options.deletingTaskId === t.num);
+
         return (
           <div
-            key={t.num}
+            key={t.id || t.num}
             style={{
               display: 'flex',
               alignItems: 'flex-start',
@@ -105,7 +119,9 @@ export function renderAgentTaskList(tasks?: ParsedAgentTask[]): React.ReactNode 
               background: tBg,
               padding: '4px 7px',
               borderRadius: 5,
-              border: '1px solid var(--af-border)'
+              border: '1px solid var(--af-border)',
+              opacity: isDeleting ? 0.4 : 1,
+              transition: 'opacity 0.2s ease'
             }}
           >
             <span style={{ fontSize: 11, flexShrink: 0, marginTop: 1 }}>{tIcon}</span>
@@ -124,6 +140,52 @@ export function renderAgentTaskList(tasks?: ParsedAgentTask[]): React.ReactNode 
             >
               {t.text}
             </span>
+            {options?.onDeleteTask && (
+              <button
+                type="button"
+                title={`Xóa nhiệm vụ #${t.num} (các nhiệm vụ sau sẽ tự động lùi số ID)`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (options.onDeleteTask) {
+                    options.onDeleteTask(t.id || t.num, t.num);
+                  }
+                }}
+                disabled={isDeleting}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-muted, #94a3b8)',
+                  cursor: isDeleting ? 'wait' : 'pointer',
+                  padding: '2px 4px',
+                  borderRadius: 4,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  marginTop: 1,
+                  transition: 'all 0.15s ease',
+                  outline: 'none',
+                  opacity: 0.65
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#ef4444';
+                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)';
+                  e.currentTarget.style.opacity = '1';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--text-muted, #94a3b8)';
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.opacity = '0.65';
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
+            )}
           </div>
         );
       })}

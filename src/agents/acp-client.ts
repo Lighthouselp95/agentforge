@@ -486,8 +486,21 @@ export class ACPClient {
    * Giới hạn queue để tránh memory leak khi agent bị kẹt.
    */
   async enqueue(prompt: string): Promise<AgentMessage> {
-    if (!this.busy && this.pending.length === 0) {
+    // SPAWN GATE (fix race double-process): chỉ spawn ngay khi KHÔNG có process đang chạy
+    // (this.proc — indicator authoritative, chỉ null khi 'close'/'error' đã kích hoạt)
+    // VÀ không có turn nào đang bay trong luồng (this.busy). Giữ cả 2 guard:
+    // - this.proc === null: chặn race cũ — busy=false nhưng process cũ còn sống.
+    // - !this.busy: chặn các cửa sổ busy=true nhưng proc=null (fetchSessions khi agent
+    //   chưa có sessionId, abort() đặt proc=null trước khi finally, retry giữa 2 attempt).
+    if (this.proc === null && !this.busy && this.pending.length === 0) {
       return this.runQueued(prompt);
+    }
+    // RESUME WORK GUARD (user yêu cầu): khi agent đang busy (process đang chạy / turn đang
+    // bay trong luồng) mà nhận === RESUME WORK === → FAIL ngay, KHÔNG vào queue.
+    // Lý do: nếu đã có process chạy rồi thì không cần nhắc resume work làm gì — gửi tiếp
+    // vào queue chỉ khiến RESUME chạy TRỄ khi process hiện tại xong (sai nghĩa lệnh resume).
+    if ((this.proc !== null || this.busy) && prompt.includes('=== RESUME WORK ===')) {
+      return Promise.reject(new Error('Agent is busy — RESUME WORK skipped (process already running)'));
     }
     // Queue tối đa 20 tin — nếu vượt, từ chối tin mới (tránh phình vô hạn)
     if (this.pending.length >= MAX_PENDING) {
