@@ -876,7 +876,7 @@ function scanStreamForDispatch(agentId: string, accumulated: string): string {
   for (const cmd of talks) {
     if (cmd.tag.toUpperCase() !== 'TALK') continue;
     // Bỏ qua TALK nằm trong code block giữa buffer (đề phòng inline) — extractDualCommands đã loại.
-    const parsed = parseTalkCommand(cmd);
+    const parsed = parseTalkCommand(cmd, fromAgent.type === 'orchestrator' ? fromAgent.id : 'orchestrator');
     if (!parsed || !parsed.agentId) continue;
 
     // ══ FIX 1: Chặn dispatch talk XML chưa hoàn chỉnh (partial/unclosed) ══
@@ -2642,7 +2642,7 @@ function parseTalkTag(tagContent: string): { agentId: string; message: string; t
   return null;
 }
 
-function parseTalkCommand(cmd: BracketCommand): { agentId: string; message: string; task?: string } | null {
+function parseTalkCommand(cmd: BracketCommand, targetOrchId: string = 'orchestrator'): { agentId: string; message: string; task?: string } | null {
   if (!cmd) return null;
 
   if (cmd.syntax === 'xml') {
@@ -2683,6 +2683,17 @@ function parseTalkCommand(cmd: BracketCommand): { agentId: string; message: stri
 
     const finalMessage = message.trim() || (task ? `New task: ${task}` : '');
     if (agentId && finalMessage) {
+      if (task) {
+        const words = task.trim().split(/\s+/).filter(Boolean);
+        if (words.length > 25) {
+          forwardToOrchestrator(
+            'TASK_BARRIER_VIOLATION',
+            `❌ [BARRIER REJECT] Thuộc tính task="..." vượt quá giới hạn 25 từ (${words.length} từ). Thuộc tính task chỉ được dùng làm tiêu đề ngắn (<= 25 từ). Toàn bộ hướng dẫn chi tiết phải đặt trong body thẻ!`,
+            targetOrchId
+          );
+          return null;
+        }
+      }
       return { agentId, message: finalMessage, ...(task ? { task: task.trim() } : {}) };
     }
     return null;
@@ -2842,7 +2853,7 @@ function sanitizeCommandInput(text: string): string {
     .replace(/^\s*>.*$/gm, '');     // strip blockquotes
 }
 
-function parseSpawnCommand(cmd: BracketCommand): { role: string; name: string; task: string } | null {
+function parseSpawnCommand(cmd: BracketCommand, targetOrchId: string = 'orchestrator'): { role: string; name: string; task: string } | null {
   if (!cmd) return null;
 
   const INVALID_PLACEHOLDERS = new Set(['<role>', '<name>', '<task>', 'role', 'name', 'task', '...', 'none', 'undefined', 'null', 'your-name', '<your-name>']);
@@ -2855,7 +2866,19 @@ function parseSpawnCommand(cmd: BracketCommand): { role: string; name: string; t
 
     const role = cleanTargetIdentifier(roleMatch ? (roleMatch[1] || roleMatch[2] || roleMatch[3] || roleMatch[4]) : '').toLowerCase();
     const name = cleanTargetIdentifier(nameMatch ? (nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4]) : '');
-    let task = stripQuotes(taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4]) : '');
+    let rawTaskAttr = stripQuotes(taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4]) : '');
+    if (rawTaskAttr) {
+      const words = rawTaskAttr.trim().split(/\s+/).filter(Boolean);
+      if (words.length > 25) {
+        forwardToOrchestrator(
+          'TASK_BARRIER_VIOLATION',
+          `❌ [BARRIER REJECT] Thuộc tính task="..." vượt quá giới hạn 25 từ (${words.length} từ). Thuộc tính task chỉ được dùng làm tiêu đề ngắn (<= 25 từ). Toàn bộ hướng dẫn chi tiết phải đặt trong body thẻ!`,
+          targetOrchId
+        );
+        return null;
+      }
+    }
+    let task = rawTaskAttr;
     let bodyContent = '';
     if (cmd.body) {
       const taskTagMatch = cmd.body.match(/<task>([\s\S]*?)<\/task>/i);
@@ -2905,12 +2928,12 @@ function parseSpawnCommand(cmd: BracketCommand): { role: string; name: string; t
   return null;
 }
 
-function parseSpawnTags(text: string): Array<{ role: string; name: string; task: string }> {
+function parseSpawnTags(text: string, targetOrchId: string = 'orchestrator'): Array<{ role: string; name: string; task: string }> {
   const spawns: Array<{ role: string; name: string; task: string }> = [];
   if (!text) return spawns;
   const commands = extractBracketCommands(text, ['SPAWN']);
   for (const cmd of commands) {
-    const parsed = parseSpawnCommand(cmd);
+    const parsed = parseSpawnCommand(cmd, targetOrchId);
     if (parsed) {
       spawns.push(parsed);
       console.log(`[SpawnParse] Hợp lệ: role=${parsed.role} name=${parsed.name} task="${parsed.task.slice(0, 60)}..."`);
@@ -2924,7 +2947,7 @@ function parseOrchestratorCommands(text: string, targetOrchId: string = 'orchest
   if (!text) return talks;
   const commands = extractBracketCommands(text, ['TALK']);
   for (const cmd of commands) {
-    const parsed = parseTalkCommand(cmd);
+    const parsed = parseTalkCommand(cmd, targetOrchId);
     if (parsed) {
       talks.push(parsed);
     } else if (cmd.attributes) {
@@ -3631,7 +3654,7 @@ async function handleOrchestratorResponse(response: string, extraScanText = '', 
   // Tag trong blockquote mô tả (target/role placeholder) sẽ lọt parse nhưng bị bỏ qua im lặng vì
   // cleanTargetIdentifier không tìm thấy agent / parseSpawnCommand trả null — không thành lệnh thật.
   const scanText = response; // FIX 3: không gộp extraScanText (thinking) vào scan spawn.
-  const spawns = parseSpawnTags(scanText);
+  const spawns = parseSpawnTags(scanText, orchId);
 
   // FIX 2 — DEDUP SPAWN theo signature (role+name+task normalized). Trong cùng 1 response, model
   // có thể emit nhiều <spawn> đồng signature (đặc biệt khi response lặp qua cả stream-dispatch lẫn

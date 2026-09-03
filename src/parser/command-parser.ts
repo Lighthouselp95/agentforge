@@ -257,6 +257,12 @@ export function parseTalkCommand(cmd: BracketCommand): { agentId: string; messag
 
     const finalMessage = message.trim() || (task ? `New task: ${task}` : '');
     if (agentId && finalMessage) {
+      if (task) {
+        const words = task.trim().split(/\s+/).filter(Boolean);
+        if (words.length > 25) {
+          return null; // Chặn thực thi lệnh vi phạm barrier vượt quá 25 từ
+        }
+      }
       return { agentId, message: finalMessage, ...(task ? { task: task.trim() } : {}) };
     }
     return null;
@@ -278,7 +284,14 @@ export function parseSpawnCommand(cmd: BracketCommand): { role: string; name: st
 
     const role = cleanTargetIdentifier(roleMatch ? (roleMatch[1] || roleMatch[2] || roleMatch[3] || roleMatch[4]) : '').toLowerCase();
     const name = cleanTargetIdentifier(nameMatch ? (nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4]) : '');
-    let task = stripQuotes(taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4]) : '');
+    let rawTaskAttr = stripQuotes(taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4]) : '');
+    if (rawTaskAttr) {
+      const words = rawTaskAttr.trim().split(/\s+/).filter(Boolean);
+      if (words.length > 25) {
+        return null; // Chặn thực thi lệnh vi phạm barrier vượt quá 25 từ
+      }
+    }
+    let task = rawTaskAttr;
     let bodyContent = '';
     if (cmd.body) {
       const taskTagMatch = cmd.body.match(/<task>([\s\S]*?)<\/task>/i);
