@@ -23,18 +23,20 @@ export const PROMPTS_CANDIDATE_DIRS = [
 ];
 
 export function loadPrompt(name: string): string {
+  // 1) Filesystem first: uu tien doc tu src/prompts
+  for (const dir of PROMPTS_CANDIDATE_DIRS) {
+    const p = join(dir, name);
+    if (existsSync(p)) {
+      try { return readFileSync(p, 'utf-8'); } catch {}
+    }
+  }
+  // 2) SEA embedded
   if (earlySeaGetAsset) {
     try {
       const key = ('src/prompts/' + name).split('\\').join('/');
       const buf = earlySeaGetAsset(key);
       if (buf) return Buffer.from(buf).toString('utf-8');
     } catch {}
-  }
-  for (const dir of PROMPTS_CANDIDATE_DIRS) {
-    const p = join(dir, name);
-    if (existsSync(p)) {
-      try { return readFileSync(p, 'utf-8'); } catch {}
-    }
   }
   console.warn(`[Prompt] Not found: ${name} (tried ${PROMPTS_CANDIDATE_DIRS.join(' | ')}), using fallback`);
   return '';

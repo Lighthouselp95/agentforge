@@ -63,6 +63,11 @@ export function extractXmlCommand(text: string, startIndex: number, targetTag: s
       syntax: 'xml'
     };
   } else {
+    // Unclosed XML tag fallback - extends to next valid command tag or EOF
+    // Thẻ <spawn> bắt buộc self-closing hoặc có thẻ đóng </spawn>, không fallback nuốt text
+    if (tagLower === 'spawn') {
+      return null;
+    }
     const nextTagIdx = afterOpen.search(/(?:<\s*(?:talk|spawn|stop|resume|create_role|create-role|stop_agent|resume_agent|delete_agent)\b|\[(?:TALK|SPAWN|STOP|RESUME|CREATE ROLE|STOP AGENT|RESUME AGENT|DELETE AGENT)\b)/i);
     const bodyLength = nextTagIdx !== -1 ? nextTagIdx : afterOpen.length;
     const body = afterOpen.substring(0, bodyLength);

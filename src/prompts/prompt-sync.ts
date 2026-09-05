@@ -23,10 +23,7 @@ export function syncOpencodeAgents(serverProjectRoot: string, targetProjectDir?:
     mkdirSync(agentsDir, { recursive: true });
     
     const workerBase = loadPrompt('worker-base.md') || '';
-    const taskReportFormat = loadPrompt(join('formats', 'task-report.md')) || '';
-    const agentMsgFormat = loadPrompt(join('formats', 'agent-message.md')) || '';
-    const errorReportFormat = loadPrompt(join('formats', 'error-report.md')) || '';
-    const formatsSection = [taskReportFormat, agentMsgFormat, errorReportFormat].filter(Boolean).join('\n\n');
+    const formatsSection = '';
 
     // 1. Sync Orchestrator
     const orchPrompt = loadPrompt('orchestrator.md') || defaultOrchPrompt || '';
@@ -36,8 +33,6 @@ description: ${ROLE_DESCRIPTIONS.orchestrator}
 mode: primary
 permission:
   "*": deny
-  read:
-    "*": allow
   edit:
     "*": deny
     "*.md": allow
@@ -45,7 +40,6 @@ permission:
     "*": deny
     "*.md": allow
   glob: allow
-  grep: allow
   webfetch: allow
   websearch: allow
   task: deny
@@ -82,8 +76,6 @@ permission:
 ${workerBase}
 
 ${rolePrompt ? rolePrompt : `# Role: ${role}\nYou are the ${role} specialist worker agent.`}
-
-${formatsSection}
 `;
       writeFileSync(join(agentsDir, `${role}.md`), fullPrompt, 'utf-8');
       console.log(`[SSoT] Synced ${isCustomDir ? join(targetProjectDir!, '.opencode', 'agents') : '.opencode/agents'}/${role}.md`);

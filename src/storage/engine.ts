@@ -128,7 +128,16 @@ export class StorageEngine {
         settings: this.inMemorySettings,
         outbox: this.inMemoryOutbox.slice(-500),
         chatQueue: this.inMemoryChatQueue.slice(-200),
-        unprocessedUserMessages: this.inMemoryUnprocessedUserMessages,
+        unprocessedUserMessages: (() => {
+          const clean: Record<string, string[]> = {};
+          for (const [k, v] of Object.entries(this.inMemoryUnprocessedUserMessages || {})) {
+            if (Array.isArray(v)) {
+              const valid = v.filter(m => typeof m === 'string' && m.trim() && !m.trim().startsWith('[TEAM]') && !m.includes('Your ID:'));
+              if (valid.length > 0) clean[k] = valid;
+            }
+          }
+          return clean;
+        })(),
         logs: this.inMemoryLogs.slice(-MAX_LOGS_ENTRIES)
       };
       const content = JSON.stringify(data, null, 2);

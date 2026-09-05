@@ -54,3 +54,58 @@ export class AgentStorage {
     return Array.from(this.engine.inMemoryAgents.values());
   }
 }
+
+// ============ TASK COUNT & EVICTION (pure helpers, dùng chung server.ts + routes) ============
+
+/**
+ * true nếu entry trong agent.tasks chỉ là tin nhắn user thường, KHÔNG phải task giao việc.
+ * Task giao việc thật có nguồn talk/spawn/task; entry chat thường mang role='user'/type='chat'.
+ */
+export function isUserChatTask(t: any): boolean {
+  if (!t || typeof t !== 'object') return false;
+  const role = String((t as any).role || '').toLowerCase().trim();
+  if (role === 'user') return true;
+  const type = String((t as any).type || '').toLowerCase().trim();
+  if (type === 'chat') return true;
+  return false;
+}
+
+/** Đếm task giao việc thực sự (loại trừ tin nhắn user thường; completed vẫn tính để trần 6 có ý nghĩa). */
+export function countRealTasks(tasks: any[]): number {
+  if (!Array.isArray(tasks)) return 0;
+  let n = 0;
+  for (const t of tasks) {
+    if (!isUserChatTask(t)) n++;
+  }
+  return n;
+}
+
+/**
+ * Đẩy task completed CŨ NHẤT (theo createdAt, bỏ qua entry user-chat) ra khỏi list
+ * + re-index id 1..N. Trả true nếu đã đẩy (caller push task mới tiếp),
+ * false nếu không còn task completed nào để dọn.
+ */
+export function evictOldestCompletedTask(tasks: any[]): boolean {
+  if (!Array.isArray(tasks) || tasks.length === 0) return false;
+  let oldestIdx = -1;
+  let oldestTs = Infinity;
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    if (!t || isUserChatTask(t) || t.status !== 'completed') continue;
+    const ts = typeof t.createdAt === 'number' ? t.createdAt : i;
+    if (ts < oldestTs) {
+      oldestTs = ts;
+      oldestIdx = i;
+    }
+  }
+  if (oldestIdx === -1) return false;
+  tasks.splice(oldestIdx, 1);
+  tasks.forEach((t, idx) => {
+    if (!t || typeof t !== 'object') return;
+    (t as any).id = String(idx + 1);
+    if (typeof (t as any).task === 'string' && /^#\d+\b/.test((t as any).task)) {
+      (t as any).task = (t as any).task.replace(/^#\d+/, `#${(t as any).id}`);
+    }
+  });
+  return true;
+}

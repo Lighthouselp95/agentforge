@@ -15,7 +15,7 @@ export function stripToolNoiseForOrchestrator(text: string): string {
     .trim();
 }
 
-// Kiểm tra khối report có ≥1 dòng KEY:/ JSON thực sự (không rỗng / không chỉ tag trần)
+// Kiểm tra khối report: chấp nhận bất kỳ nội dung nào bên trong thẻ <report> hoặc khối report (tự do, không ép KEY: hay JSON)
 export function hasReportBody(text: string): boolean {
   const body = (text || '').trim();
   if (!body) return false;
@@ -25,9 +25,7 @@ export function hasReportBody(text: string): boolean {
     .replace(/===\s*END[^=\n]*REPORT\s*===/gi, '')
     .replace(/<\/?\s*(?:report|task_report|task-report|error_report|error-report)\s*>?/gi, '')
     .trim();
-  if (!stripped) return false;
-  // Có ít nhất 1 dòng "KEY: value" (UPPER/Snake) hoặc JSON object → được xem là report thực.
-  return /^[A-Z][A-Z_0-9]*(?:\s*:)/mi.test(stripped) || /^\s*\{[\s\S]*\}/.test(stripped);
+  return stripped.length > 0;
 }
 
 export function findReportMarkerOutsideCode(text: string): number | undefined {
@@ -106,11 +104,13 @@ export function formatIncomingHeader(fromName: string, fromId: string, fromRole:
 
 export function buildWorkerTalkPrompt(
   teamPrompt: string,
-  from: { name: string; id: string; role: string },
-  to: { name: string; id: string; role: string },
+  from: { name: string; id: string; role: string; type?: string },
+  to: { name: string; id: string; role: string; type?: string },
   message: string,
   workerReminder: string
 ): string {
   const header = formatIncomingHeader(from.name, from.id, from.role, to.name, to.id, to.role);
-  return `[TEAM]\n${teamPrompt}\n[/TEAM]\n\n${header}\n${message}\n\n${workerReminder}`;
+  const isFromOrch = from.role === 'orchestrator' || from.type === 'orchestrator' || from.id === 'orchestrator';
+  const teamBlock = isFromOrch && teamPrompt ? `[TEAM]\n${teamPrompt}\n[/TEAM]\n\n` : '';
+  return `${teamBlock}${header}\n${message}\n\n${workerReminder}`;
 }

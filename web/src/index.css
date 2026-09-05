@@ -406,6 +406,8 @@ html[data-theme='dark'] .af-bubble-user,
   color: #e8edf3 !important;
   width: fit-content !important;
   max-width: 85% !important;
+  margin-left: auto !important;
+  align-self: flex-end !important;
 }
 
 /* Light Theme: Bo góc 12px, viền mờ #e2e8f0, nền trắng #ffffff sạch sẽ, đổ bóng nhẹ */
@@ -429,6 +431,8 @@ html[data-theme='light'] .af-bubble-user {
   color: #1e3a8a !important;
   width: fit-content !important;
   max-width: 85% !important;
+  margin-left: auto !important;
+  align-self: flex-end !important;
 }
 
 /* ===== 3-LAYER SURFACE ELEVATION ===== */
@@ -506,3 +510,66 @@ html[data-theme='light'] .af-thinking {
 .af-card.af-working {
   animation: af-working-pulse 2.4s ease-in-out infinite;
 }
+
+/* Light Theme High Contrast Text Overrides for Agent Names & Badges */
+html[data-theme='light'] .af-chat-title {
+  color: #0f172a !important;
+  font-weight: 700 !important;
+}
+
+html[data-theme='light'] .af-sender-pill,
+html[data-theme='light'] .af-receiver-pill {
+  background: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+html[data-theme='light'] .af-sender-user {
+  background: #eff6ff !important;
+  border-color: #93c5fd !important;
+  color: #1e3a8a !important;
+}
+
+html[data-theme='light'] .af-sender-orch {
+  background: #eef2ff !important;
+  border-color: #a5b4fc !important;
+  color: #312e81 !important;
+}
+
+html[data-theme='light'] .af-sender-worker {
+  background: #ecfdf5 !important;
+  border-color: #6ee7b7 !important;
+  color: #064e3b !important;
+}
+
+html[data-theme='light'] .af-receiver-pill {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+html[data-theme='light'] .af-receiver-arrow {
+  color: #4f46e5 !important;
+}
+
+html[data-theme='light'] .af-card-agent-name {
+  color: #0f172a !important;
+  font-weight: 700 !important;
+}
+
+html[data-theme='light'] .af-directive-header-orch {
+  background: #eef2ff !important;
+  border-color: #c7d2fe !important;
+  color: #312e81 !important;
+}
+
+html[data-theme='light'] .af-directive-header-target {
+  background: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+html[data-theme='light'] .af-spawn-target-name {
+  color: #581c87 !important;
+}
+

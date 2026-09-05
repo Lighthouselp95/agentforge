@@ -22,22 +22,38 @@ export class BroadcastBus {
   }
 
   public broadcast(type: string, data: any): void {
-    const payload = { type, ...data };
+    let broadcastTeamId = data?.teamId;
+    if (!broadcastTeamId && data?.msg?.teamId) {
+      broadcastTeamId = data.msg.teamId;
+    }
+    if (!broadcastTeamId && data?.agent?.teamId) {
+      broadcastTeamId = data.agent.teamId;
+    }
+
+    const payload = { type, ...(broadcastTeamId ? { teamId: broadcastTeamId } : {}), ...data };
     const msg = JSON.stringify(payload);
 
-    // WebSocket broadcast
+    // WebSocket broadcast với team filter
     this.wsClients.forEach(ws => {
       try {
         if (ws.readyState === 1) { // OPEN
+          const wsTeam = (ws as any).teamId;
+          if (wsTeam && broadcastTeamId && wsTeam !== broadcastTeamId) {
+            return;
+          }
           ws.send(msg);
         }
       } catch {}
     });
 
-    // SSE broadcast
+    // SSE broadcast với team filter
     const sseData = `data: ${msg}\n\n`;
     this.sseClients.forEach(res => {
       try {
+        const sseTeam = (res as any).teamId;
+        if (sseTeam && broadcastTeamId && sseTeam !== broadcastTeamId) {
+          return;
+        }
         res.write(sseData);
         if (typeof (res as any).flush === 'function') {
           (res as any).flush();
@@ -48,10 +64,10 @@ export class BroadcastBus {
     });
 
     // Custom listeners
-    for (const listener of this.customListeners) {
+    this.customListeners.forEach(fn => {
       try {
-        listener(type, data);
+        fn(type, payload);
       } catch {}
-    }
+    });
   }
 }

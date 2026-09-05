@@ -21,9 +21,28 @@ export class WebSocketService {
       console.error(`[WS] WebSocket server error:`, err?.message || err);
     });
 
-    this.wss.on('connection', (ws: WebSocket) => {
+    this.wss.on('connection', (ws: WebSocket, req: any) => {
       this.wsClients.add(ws);
       (ws as any)._isAlive = true;
+
+      // Extract teamId from query params e.g. ws://host/?teamId=xyz
+      try {
+        if (req && req.url) {
+          const urlObj = new URL(req.url, 'http://localhost');
+          const tId = urlObj.searchParams.get('teamId');
+          if (tId) (ws as any).teamId = tId;
+        }
+      } catch {}
+
+      ws.on('message', (raw: any) => {
+        try {
+          const parsed = JSON.parse(raw.toString());
+          if (parsed && parsed.type === 'subscribe' && parsed.teamId) {
+            (ws as any).teamId = parsed.teamId;
+          }
+        } catch {}
+      });
+
       ws.on('pong', () => {
         (ws as any)._isAlive = true;
       });

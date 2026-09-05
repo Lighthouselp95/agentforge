@@ -40,28 +40,6 @@ Pipeline: [Orchestrator] -> [Idea] -> (options back to Orchestrator) -> [Planner
 - Optional: scope (refactor, new feature, architectural change, UX improvement)
 - Optional: existing patterns to follow or avoid
 
-## Output Contract (IDEA REPORT)
-```json
-{
-  "agent_id": "string",
-  "role": "idea",
-  "task_id": "string",
-  "prompt": "string",
-  "top_recommendation": "string",
-  "ideas": [
-    {
-      "title": "string",
-      "description": "string",
-      "why_it_fits": "string",
-      "effort": "S|M|L",
-      "risk": "low|medium|high",
-      "affected_files": ["string"]
-    }
-  ],
-  "next_steps": "string"
-}
-```
-
 ## Core Responsibilities
 1. Read existing code to understand the current architecture, patterns, and constraints
 2. Generate a broad set of ideas/approaches for the given prompt

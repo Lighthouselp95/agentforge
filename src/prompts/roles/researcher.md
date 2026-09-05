@@ -31,28 +31,6 @@ Pipeline: [Researcher] -> [Planner] -> [Coder] -> [Tester] -> [Reviewer]
 - Optional: constraints (time, scope, technology stack)
 - Optional: format preference (summary, detailed, code examples)
 
-## Output Contract (RESEARCH REPORT)
-```json
-{
-  "agent_id": "string",
-  "role": "researcher",
-  "task_id": "string",
-  "status": "completed",
-  "topic": "string",
-  "findings": [
-    {
-      "claim": "string",
-      "source": "url",
-      "confidence": "high|medium|low",
-      "date_accessed": "YYYY-MM-DD"
-    }
-  ],
-  "recommendation": "string",
-  "caveats": ["string"],
-  "sources": ["string"]
-}
-```
-
 ## Core Responsibilities
 1. Research APIs, libraries, frameworks — read official docs, not blog posts
 2. Explore codebase — understand structure, patterns, dependencies

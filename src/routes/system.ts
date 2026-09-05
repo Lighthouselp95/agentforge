@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { join } from 'path';
+import { spawn } from 'child_process';
 
 export interface SystemRouteDeps {
   appVersion: string;
@@ -42,6 +44,30 @@ export function createSystemRouter(deps: SystemRouteDeps): Router {
     deps.storage.clearLogs();
     deps.logBuffer.length = 0;
     res.json({ success: true, message: 'Logs cleared successfully' });
+  });
+
+  // POST /api/restart — Restart Server Endpoint (Detached Spawn), dời verbatim từ server.ts
+  router.post('/restart', (_req, res) => {
+    res.json({ success: true, message: 'Restarting AgentForge server...' });
+    setTimeout(() => {
+      try {
+        const batPath = join(process.cwd(), 'start.bat');
+        const isWin = process.platform === 'win32';
+        const child = spawn(
+          isWin ? 'cmd.exe' : 'sh',
+          isWin ? ['/c', batPath] : ['-c', 'npm start'],
+          {
+            detached: true,
+            stdio: 'ignore',
+            cwd: process.cwd()
+          }
+        );
+        child.unref();
+      } catch (e: any) {
+        console.error('[Restart] Failed to spawn restart process:', e);
+      }
+      process.exit(0);
+    }, 500);
   });
 
   return router;

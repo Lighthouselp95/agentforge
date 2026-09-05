@@ -3,6 +3,7 @@ export interface OutboxReport {
   fromAgentId: string;
   fromAgentName: string;
   fromAgentRole: string;
+  teamId?: string; // teamId của agent gửi — dùng khi replay để không giao nhầm team
   to: string; // 'orchestrator' hoặc agent id
   message: string;
   createdAt: number;
@@ -66,6 +67,38 @@ export interface ModelSettings {
   orchestratorModel: string | null;
   defaultSubagentModel: string | null;
   agentModelOverrides: Record<string, string>;
+}
+
+// ============ TEAM SETTINGS (live per-team limits, editable via UI/API) ============
+export interface TeamSettings {
+  /** Max tasks chưa hoàn thành trên 1 agent (default 6, khớp MAX_AGENT_TASKS cũ). */
+  taskLimit: number;
+  /** Trần số agent theo từng role trong team. Role không liệt kê → fallback 1 (khớp getRoleLimit cũ). */
+  agentLimits: Record<string, number>;
+  /** Max tổng thành viên trong 1 team, tính cả Orchestrator (default 6, khớp MAX_TEAM_SIZE cũ). */
+  maxTeamSize: number;
+  /** Max số role phân biệt trong 1 team (default 12 — generous, không phá vỡ team hiện tại). */
+  maxRoles: number;
+}
+
+export const DEFAULT_TEAM_SETTINGS: TeamSettings = {
+  taskLimit: 6,
+  agentLimits: { coder: 4, researcher: 2 },
+  maxTeamSize: 6,
+  maxRoles: 12
+};
+
+export interface SpawnGateUsage {
+  teamSize: number;
+  roleCount: number;
+  distinctRoles: number;
+  roleExists: boolean;
+}
+
+export interface SpawnGateResult {
+  canSpawn: boolean;
+  reason: string;
+  code: 'OK' | 'TEAM_LIMIT' | 'ROLE_LIMIT' | 'ROLES_LIMIT';
 }
 
 export interface UpdateAgentOptions {

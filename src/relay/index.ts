@@ -9,3 +9,6 @@ export * from './router.js';
 export * from './outbox-dispatcher.js';
 export * from './team-router.js';
 export * from './outbox-engine.js';
+export * from './user-queue.js';
+export * from './outbox-service.js';
+export * from './team-isolation.js';

@@ -259,8 +259,8 @@ export function parseTalkCommand(cmd: BracketCommand): { agentId: string; messag
     if (agentId && finalMessage) {
       if (task) {
         const words = task.trim().split(/\s+/).filter(Boolean);
-        if (words.length > 25) {
-          return null; // Chặn thực thi lệnh vi phạm barrier vượt quá 25 từ
+        if (words.length > 30) {
+          return null; // Chặn thực thi lệnh vi phạm barrier vượt quá 30 từ
         }
       }
       return { agentId, message: finalMessage, ...(task ? { task: task.trim() } : {}) };
@@ -287,8 +287,8 @@ export function parseSpawnCommand(cmd: BracketCommand): { role: string; name: st
     let rawTaskAttr = stripQuotes(taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || taskMatch[4]) : '');
     if (rawTaskAttr) {
       const words = rawTaskAttr.trim().split(/\s+/).filter(Boolean);
-      if (words.length > 25) {
-        return null; // Chặn thực thi lệnh vi phạm barrier vượt quá 25 từ
+      if (words.length > 30) {
+        return null; // Chặn thực thi lệnh vi phạm barrier vượt quá 30 từ
       }
     }
     let task = rawTaskAttr;

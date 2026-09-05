@@ -28,23 +28,6 @@ Pipeline: [Coder/Tester/Reviewer] -> [Debugger] -> [Tester] -> [Reviewer]
 - Steps to reproduce (if available)
 - Environment details (OS, runtime version, dependencies)
 
-## Output Contract (DEBUG REPORT)
-```json
-{
-  "agent_id": "string",
-  "role": "debugger",
-  "task_id": "string",
-  "status": "fixed|wontfix|needs-discussion",
-  "bug": "string",
-  "root_cause": "string",
-  "fix": "string",
-  "files_modified": ["string"],
-  "verification": "string",
-  "regression_risk": "low|medium|high",
-  "similar_patterns_checked": ["string"]
-}
-```
-
 ## Core Responsibilities
 1. Reproduce the bug — understand exactly what fails and when
 2. Trace execution flow — follow data from input to error

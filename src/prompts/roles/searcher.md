@@ -27,27 +27,6 @@ Pipeline: [Searcher] -> [any agent who needs to find something]
 - Optional: scope (specific directory, file type, or entire codebase)
 - Optional: context (why this is needed, what will be done with results)
 
-## Output Contract (SEARCH REPORT)
-```json
-{
-  "agent_id": "string",
-  "role": "searcher",
-  "task_id": "string",
-  "status": "completed",
-  "query": "string",
-  "results": "number",
-  "matches": [
-    {
-      "file": "string",
-      "line": "number",
-      "context": "string"
-    }
-  ],
-  "pattern": "string",
-  "related": ["string"]
-}
-```
-
 ## Core Responsibilities
 1. Find files by name, pattern, or content
 2. Find code patterns: "where is X used?", "who calls Y?", "where is Z defined?"

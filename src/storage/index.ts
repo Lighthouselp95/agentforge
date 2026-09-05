@@ -3,6 +3,7 @@ import { AgentStorage } from './agent-storage.js';
 import { MessageStorage } from './message-storage.js';
 import { QueueStorage } from './queue-storage.js';
 import { SettingsStorage } from './settings-storage.js';
+import { TeamSettingsStorage } from './team-settings.js';
 import { LogStorage } from './log-storage.js';
 import type {
   OutboxReport,
@@ -12,7 +13,10 @@ import type {
   HistoryPageOptions,
   LogFilterOptions,
   ModelSettings,
-  UpdateAgentOptions
+  UpdateAgentOptions,
+  TeamSettings,
+  SpawnGateUsage,
+  SpawnGateResult
 } from './types.js';
 
 export class AppStorage {
@@ -21,6 +25,7 @@ export class AppStorage {
   public messages: MessageStorage;
   public queues: QueueStorage;
   public settings: SettingsStorage;
+  public teamSettings: TeamSettingsStorage;
   public logs: LogStorage;
 
   constructor() {
@@ -29,6 +34,7 @@ export class AppStorage {
     this.messages = new MessageStorage(this.engine);
     this.queues = new QueueStorage(this.engine);
     this.settings = new SettingsStorage(this.engine);
+    this.teamSettings = new TeamSettingsStorage(this.engine);
     this.logs = new LogStorage(this.engine);
   }
 
@@ -64,10 +70,6 @@ export class AppStorage {
   // Delegate Message methods
   saveMessage(msg: any): void {
     this.messages.saveMessage(msg);
-  }
-
-  saveOpenCodeSnapshot(msg: any): void {
-    this.messages.saveOpenCodeSnapshot(msg);
   }
 
   getHistory(limit?: number, teamId?: string): any[] {
@@ -159,6 +161,10 @@ export class AppStorage {
     return this.queues.getUnprocessedMessages(targetId);
   }
 
+  getAllUnprocessedMessages(): Record<string, string[]> {
+    return this.queues.getAllUnprocessedMessages();
+  }
+
   clearUnprocessedMessages(targetId: string): void {
     this.queues.clearUnprocessedMessages(targetId);
   }
@@ -188,6 +194,23 @@ export class AppStorage {
     return this.settings.setModelSettings(settings);
   }
 
+  // Delegate Team Settings methods (live per-team limits)
+  getTeamSettings(teamId: string): TeamSettings {
+    return this.teamSettings.getTeamSettings(teamId);
+  }
+
+  setTeamSettings(teamId: string, patch: Partial<TeamSettings>): TeamSettings {
+    return this.teamSettings.setTeamSettings(teamId, patch);
+  }
+
+  resetTeamSettings(teamId: string): TeamSettings {
+    return this.teamSettings.resetTeamSettings(teamId);
+  }
+
+  checkTeamSpawnGate(teamId: string, role: string, usage: SpawnGateUsage): SpawnGateResult {
+    return this.teamSettings.checkSpawnGate(this.getTeamSettings(teamId), role, usage);
+  }
+
   // Delegate Log methods
   saveLog(entry: Omit<SystemLogEntry, 'id' | 'timestamp'> & { id?: string; timestamp?: number }): SystemLogEntry {
     return this.logs.saveLog(entry);
@@ -215,7 +238,39 @@ export class AppStorage {
   }
 }
 
-export const storage = new AppStorage();
+// Lazy initialization via Proxy: storage singleton is created only on FIRST actual property access,
+// NOT during module evaluation. This avoids TDZ when storage is accessed during bootstrap
+// (e.g., console.log override calls pushLogLine which accesses storage.saveLog).
+let _storageInstance: AppStorage | null = null;
+export function getStorageInstance(): AppStorage {
+    if (_storageInstance === null) {
+        _storageInstance = new AppStorage();
+    }
+    return _storageInstance;
+}
+export const storage = new Proxy({} as AppStorage, {
+    get(_target, prop) {
+        const inst = getStorageInstance();
+        return (inst as any)[prop];
+    },
+    set(_target, prop, value) {
+        const inst = getStorageInstance();
+        (inst as any)[prop] = value;
+        return true;
+    },
+    has(_target, prop) {
+        const inst = getStorageInstance();
+        return prop in inst;
+    },
+    ownKeys() {
+        const inst = getStorageInstance();
+        return Reflect.ownKeys(inst);
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+        const inst = getStorageInstance();
+        return Reflect.getOwnPropertyDescriptor(inst, prop);
+    },
+});
 // Re-exports of granular stores and utilities
 export * from './types.js';
 export * from './constants.js';
@@ -236,17 +291,7 @@ export * from './agent-storage.js';
 export * from './message-storage.js';
 export * from './queue-storage.js';
 export * from './settings-storage.js';
+export * from './team-settings.js';
 export * from './log-storage.js';
 
 export default storage;
-
-
-export * from './types.js';
-export * from './constants.js';
-export * from './file-utils.js';
-export * from './engine.js';
-export * from './agent-storage.js';
-export * from './message-storage.js';
-export * from './queue-storage.js';
-export * from './settings-storage.js';
-export * from './log-storage.js';

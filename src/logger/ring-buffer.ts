@@ -14,6 +14,15 @@ export function subscribeLog(listener: LogListener): () => void {
   };
 }
 
+// Lazy storage ref to avoid TDZ: storage is imported at top-level but `pushLogLine`
+// may be called DURING module evaluation (when console.log override fires).
+let storageRef: any = null;
+function getStorage(): any {
+  if (storageRef !== null) return storageRef;
+  try { storageRef = require('../storage.js').storage; } catch {}
+  return storageRef;
+}
+
 export function pushLogLine(rawArgs: any[], level: 'info' | 'warn' | 'error' | 'debug' = 'info'): string {
   const line = rawArgs.map(a => (typeof a === 'string' ? a : (a instanceof Error ? (a.stack || a.message) : safeStringify(a)))).join(' ');
   const ts = new Date().toISOString();
@@ -23,11 +32,14 @@ export function pushLogLine(rawArgs: any[], level: 'info' | 'warn' | 'error' | '
   
   const source = extractLogSourceTag(line);
   try {
-    storage.saveLog({
-      level,
-      source,
-      message: line
-    });
+    const stor = getStorage();
+    if (stor) {
+      stor.saveLog({
+        level,
+        source,
+        message: line
+      });
+    }
   } catch {}
 
   const now = Date.now();
@@ -39,3 +51,6 @@ export function pushLogLine(rawArgs: any[], level: 'info' | 'warn' | 'error' | '
 
   return formattedLine;
 }
+
+// Initialize lazy storage ref AFTER module imports have resolved
+storageRef = require('../storage.js').storage;

@@ -1,18 +1,18 @@
 export const ROLE_LIMITS: Record<string, number> = {
   coder: 4,
-  verifier: 2,
   researcher: 2,
-  tester: 2,
-  reviewer: 2,
-  docs: 2,
-  planner: 2,
-  debugger: 2,
-  searcher: 2,
-  idea: 2,
+  verifier: 1,
+  tester: 1,
+  reviewer: 1,
+  docs: 1,
+  planner: 1,
+  debugger: 1,
+  searcher: 1,
+  idea: 1,
   orchestrator: 1
 };
 
-export const DEFAULT_ROLE_LIMIT = 2;
+export const DEFAULT_ROLE_LIMIT = 1;
 
 export function getRoleLimit(role: string): number {
   const norm = (role || '').toLowerCase().trim();

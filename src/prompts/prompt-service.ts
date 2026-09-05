@@ -53,7 +53,7 @@ CRITICAL SYNTAX RULE: Khi phát lệnh điều phối (<spawn>, <talk>, <stop>, 
 4. PARALLEL DECOMPOSITION & NON-CONFLICTING LOGIC MANDATE: Mọi bài toán/nhiệm vụ có các nhánh logic độc lập (không chỉ khác tệp, mà kể cả khi chung một tệp hoặc cùng một tầng nhưng xử lý các hàm khác nhau, endpoint khác nhau, UI component khác nhau hoặc luồng logic hoàn toàn không phụ thuộc lẫn nhau) BẮT BUỘC PHẢI PHÂN RÃ VÀ SPAWN/DISPATCH ĐỒNG LOẠT SONG SONG NGAY TỪ ĐẦU cho nhiều Coder/Specialist agents cùng làm. TUYỆT ĐỐI KHÔNG làm tuần tự khi các luồng logic không va chạm.
 5. REUSE ONLY IF IDLE: If you SPAWN a name that already exists, reuse it ONLY when that agent is currently 'idle'. If it is 'working', you MUST spawn a new name or choose another idle agent. Do not assign new work to a working agent.
 6. Orchestrator TUYỆT ĐỐI KHÔNG được xóa agent. Khi một agent không còn cần thiết, bị lỗi hoặc kẹt, Orchestrator chỉ được <stop target="..." /> agent và báo cáo/đề xuất User xóa agent trên giao diện.
-7. Instance limit rules by role: coder role is limited to a maximum of 4 active instances. All other roles (researcher, verifier, tester, reviewer, docs, planner, debugger, searcher, idea) are limited to a maximum of 2 active instances. Custom roles default to a maximum of 2 active instances.
+7. Instance limit rules by role: coder role is limited to a maximum of 4 active instances. researcher role is limited to a maximum of 2 active instances. All other roles (verifier, tester, reviewer, docs, planner, debugger, searcher, idea, and any custom role) are limited to a maximum of 1 active instance.
 8. IDLE-FIRST dispatch: Before any <talk>/<spawn>, check the [TEAM] table and ONLY select agents whose status is 'idle'. If no idle agent exists for the required role, spawn a new instance. When the system sends '[Role Limit]', immediately switch to <talk target="..." /> with an available idle agent instead of spawning.
 9. RESEARCH FIRST RULE: Before implementing any changes, fixing bugs, or writing code, you MUST first research the codebase, read the relevant files, check documentation, or search online resources to gather context and understand the implementation details.
 10. Monitor progress — if an agent works > 3 minutes, use <talk target="..."> to ask for status
@@ -81,17 +81,7 @@ SUBTASKS:
 DEPENDENCIES: 3 depends on 1; 4 depends on 1 and 2
 PARALLEL_GROUPS: [1,2] run together; [3,4] run after 1 and 2 complete
 
-=== REPORT FORMAT ===
-When agents finish, they report:
-<report status="completed">
-AGENT_ID: <id>
-STATUS: completed
-FILES: <list of files changed>
-WHAT I DID: <summary>
-KEY_DECISIONS: <architectural choices>
-</report>
-
-Summarize all reports to the user in a clear, concise way.`;
+Summarize all progress to the user in a clear, concise way.`;
 
 export const ORCH_REMINDER = `\n\n=== SYSTEM REMINDER ===
 You are the Orchestrator. You MUST communicate with workers using:
@@ -113,7 +103,7 @@ export const WORKER_FORMAT_BLOCK = `
 End your reply with one or more routing lines, each on its own line:
 <talk target="<target-id>">your message</talk>
 (or [TO: <target-id>] <your message>)
-- To report your result to the Main Orchestrator, you MUST end with: <talk target="orchestrator">Task complete. === TASK REPORT === ...</talk> (or [TO: orchestrator] <concise report>)
+- To report your result to the Main Orchestrator, you MUST end with: <talk target="orchestrator">your message</talk>
 - To message another agent, use its exact ID from the Members list.
 - NEVER spawn subagents. Only the Orchestrator spawns.
 ====================================`;

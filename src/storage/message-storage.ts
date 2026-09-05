@@ -1,21 +1,19 @@
 import type { StorageEngine } from './engine.js';
 import type { HistoryPageOptions } from './types.js';
 import { MAX_PERSISTED_MESSAGES } from './constants.js';
+import { resolveTeamIdForMsg } from './team-resolver.js';
 
 export class MessageStorage {
   constructor(private engine: StorageEngine) {}
 
   // Xác định teamId của một tin nhắn dựa trên agent liên quan (from/to).
-  // Ưu tiên: msg.teamId sẵn → agent theo from → agent theo to → 'default'.
+  // Ủy quyền hoàn toàn cho team-resolver.ts để đảm bảo một nguồn chân lý (Single Source of Truth)
   resolveTeamIdForMsg(msg: any): string {
-    if (msg && msg.teamId && typeof msg.teamId === 'string') return msg.teamId;
-    const candidates = [msg && msg.from, msg && msg.to];
-    for (const cid of candidates) {
-      if (!cid || typeof cid !== 'string') continue;
-      const ag = this.engine.inMemoryAgents.get(cid);
-      if (ag && ag.teamId && typeof ag.teamId === 'string') return ag.teamId;
-    }
-    return 'default';
+    return resolveTeamIdForMsg(
+      msg,
+      (id: string) => this.engine.inMemoryAgents.get(id),
+      () => Array.from(this.engine.inMemoryAgents.values())
+    );
   }
 
   saveMessage(msg: any): void {
@@ -28,24 +26,6 @@ export class MessageStorage {
     if (Number.isFinite(MAX_PERSISTED_MESSAGES) && this.engine.inMemoryHistory.length > MAX_PERSISTED_MESSAGES) {
       this.engine.inMemoryHistory.shift();
     }
-    this.engine.schedulePersist();
-  }
-
-  saveOpenCodeSnapshot(msg: any): void {
-    const from = msg?.from;
-    if (from) {
-      const prev = this.engine.inMemoryHistory.find(
-        m => m.msgType === 'opencode' && (m.from === from || m.from_id === from)
-      );
-      if (prev) {
-        if ((!msg.thinking || !String(msg.thinking).trim()) && prev.thinking) msg.thinking = prev.thinking;
-        if ((!msg.toolCalls || !msg.toolCalls.length) && prev.toolCalls?.length) msg.toolCalls = prev.toolCalls;
-      }
-      this.engine.inMemoryHistory = this.engine.inMemoryHistory.filter(
-        m => !(m.msgType === 'opencode' && (m.from === from || m.from_id === from))
-      );
-    }
-    this.engine.inMemoryHistory.push({ ...msg });
     this.engine.schedulePersist();
   }
 

@@ -300,6 +300,16 @@ html[data-theme='dark'] .af-bottompanel {
   text-overflow: ellipsis;
 }
 
+html[data-theme='light'] .af-tab-name {
+  color: #0f172a !important;
+  font-weight: 700;
+}
+
+html[data-theme='light'] .af-tab-role {
+  color: #475569 !important;
+  font-weight: 600;
+}
+
 .af-tab-role {
   color: var(--text-muted);
   flex-shrink: 1;

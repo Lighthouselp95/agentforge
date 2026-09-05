@@ -114,8 +114,11 @@ export class QueueStorage {
   }
 
   // ============ UNPROCESSED USER MESSAGES (Preserve on Abort / Stop) ============
+  // Giữ nguyên auto-continue: persist mọi message hợp lệ. Validate đầu vào —
+  // không persist khi thiếu text/target (tránh bản ghi mồ côi teamId sai).
   saveUnprocessedMessage(targetId: string, text: string): void {
-    if (!text || !text.trim()) return;
+    if (!text || !text.trim() || !targetId) return;
+    if (typeof text === 'string' && (text.trim().startsWith('[TEAM]') || text.includes('Your ID:'))) return;
     const key = targetId || 'orchestrator';
     if (!this.engine.inMemoryUnprocessedUserMessages[key]) {
       this.engine.inMemoryUnprocessedUserMessages[key] = [];
@@ -130,6 +133,16 @@ export class QueueStorage {
   getUnprocessedMessages(targetId: string): string[] {
     const key = targetId || 'orchestrator';
     return (this.engine.inMemoryUnprocessedUserMessages[key] || []).slice();
+  }
+
+  getAllUnprocessedMessages(): Record<string, string[]> {
+    const result: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(this.engine.inMemoryUnprocessedUserMessages || {})) {
+      if (Array.isArray(v) && v.length > 0) {
+        result[k] = v.slice();
+      }
+    }
+    return result;
   }
 
   clearUnprocessedMessages(targetId: string): void {

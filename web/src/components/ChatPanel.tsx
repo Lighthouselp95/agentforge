@@ -496,6 +496,171 @@ function parseXmlAttributes(attrStr: string): Record<string, string> {
   return attrs;
 }
 
+export interface DirectiveItem {
+  type: 'text' | 'talk' | 'spawn';
+  start: number;
+  end: number;
+  text?: string;
+  data: {
+    target?: string;
+    role?: string;
+    name?: string;
+    task?: string;
+    message?: string;
+    raw: string;
+  };
+}
+
+export function extractAllDirectivesAndText(content: string): DirectiveItem[] {
+  if (!content) return [];
+  const text = String(content).normalize('NFC');
+  const items: DirectiveItem[] = [];
+
+  // Regex bắt toàn bộ các khối <spawn ...>...</spawn>, <spawn .../>, <talk ...>...</talk>, <talk .../>
+  // và [SPAWN ...] hoặc [TALK ...]...[/TALK]
+  const directiveRegex = /(?:<\s*spawn\b([^>]*)\/>|<\s*spawn\b([^>]*)>([\s\S]*?)<\/\s*spawn\s*>|\[SPAWN\]\s*(\S+)\s*(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:assigned:\s*([\s\S]*?))?(?=(?:<\s*(?:talk|spawn)|\[(?:TALK|SPAWN)|$))|<\s*talk\b([^>]*)\/>|<\s*talk\b([^>]*)>([\s\S]*?)<\/\s*talk\s*>|\[TALK\b([^\]]*)\]([\s\S]*?)(?:\[\/TALK\]|(?=\[(?:TALK|SPAWN)|<\s*(?:talk|spawn)|$)))/gi;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = directiveRegex.exec(text)) !== null) {
+    const matchIndex = match.index;
+    const matchStr = match[0];
+    const matchEnd = matchIndex + matchStr.length;
+
+    // Nếu có text trước thẻ directive
+    if (matchIndex > lastIndex) {
+      const precedingText = text.substring(lastIndex, matchIndex);
+      if (precedingText.trim().length > 0) {
+        items.push({
+          type: 'text',
+          start: lastIndex,
+          end: matchIndex,
+          text: precedingText,
+          data: { raw: precedingText }
+        });
+      }
+    }
+
+    // Phân tích directive item
+    if (match[1] !== undefined) {
+      // Self-closing <spawn ... />
+      const attrs = parseXmlAttributes(match[1]);
+      items.push({
+        type: 'spawn',
+        start: matchIndex,
+        end: matchEnd,
+        data: {
+          role: attrs.role || '',
+          name: attrs.name || attrs.target || '',
+          task: attrs.task || attrs.message || '',
+          target: attrs.name || attrs.target || '',
+          raw: matchStr
+        }
+      });
+    } else if (match[2] !== undefined) {
+      // Full XML <spawn ...>body</spawn>
+      const attrs = parseXmlAttributes(match[2]);
+      const body = (match[3] || '').trim();
+      const combinedTask = [attrs.task, body].filter(Boolean).join('\n\n') || attrs.task || body;
+      items.push({
+        type: 'spawn',
+        start: matchIndex,
+        end: matchEnd,
+        data: {
+          role: attrs.role || '',
+          name: attrs.name || attrs.target || '',
+          task: combinedTask,
+          message: body,
+          target: attrs.name || attrs.target || '',
+          raw: matchStr
+        }
+      });
+    } else if (match[4] !== undefined) {
+      // Bracket [SPAWN] role "name" assigned: task
+      const role = match[4] || '';
+      const name = match[5] || match[6] || match[7] || '';
+      const task = (match[8] || '').trim();
+      items.push({
+        type: 'spawn',
+        start: matchIndex,
+        end: matchEnd,
+        data: {
+          role,
+          name,
+          task,
+          target: name,
+          raw: matchStr
+        }
+      });
+    } else if (match[9] !== undefined) {
+      // Self-closing <talk ... />
+      const attrs = parseXmlAttributes(match[9]);
+      items.push({
+        type: 'talk',
+        start: matchIndex,
+        end: matchEnd,
+        data: {
+          target: attrs.target || attrs.agent || attrs.to || '',
+          task: attrs.task || '',
+          message: attrs.message || attrs.msg || attrs.content || '',
+          raw: matchStr
+        }
+      });
+    } else if (match[10] !== undefined) {
+      // Full XML <talk ...>body</talk>
+      const attrs = parseXmlAttributes(match[10]);
+      const body = (match[11] || '').trim();
+      items.push({
+        type: 'talk',
+        start: matchIndex,
+        end: matchEnd,
+        data: {
+          target: attrs.target || attrs.agent || attrs.to || '',
+          task: attrs.task || '',
+          message: body || attrs.message || attrs.msg || attrs.content || '',
+          raw: matchStr
+        }
+      });
+    } else if (match[12] !== undefined) {
+      // Bracket [TALK attrs]body[/TALK]
+      const attrs = parseXmlAttributes(match[12]);
+      const body = (match[13] || '').replace(/\[\/TALK\]\s*$/i, '').trim();
+      items.push({
+        type: 'talk',
+        start: matchIndex,
+        end: matchEnd,
+        data: {
+          target: attrs.target || attrs.agent || attrs.to || '',
+          task: attrs.task || '',
+          message: body || attrs.message || attrs.msg || attrs.content || '',
+          raw: matchStr
+        }
+      });
+    }
+
+    lastIndex = matchEnd;
+  }
+
+  // Nếu còn text sau directive cuối cùng
+  if (lastIndex < text.length) {
+    const trailingText = text.substring(lastIndex);
+    if (trailingText.trim().length > 0) {
+      items.push({
+        type: 'text',
+        start: lastIndex,
+        end: text.length,
+        text: trailingText,
+        data: { raw: trailingText }
+      });
+    }
+  }
+
+  // Giữ nguyên order index theo đúng vị trí xuất hiện (match.index / start)
+  items.sort((a, b) => a.start - b.start);
+  return items;
+}
+
 interface SplitMessageResult {
   conversationText: string;
   hasReport: boolean;
@@ -540,6 +705,15 @@ function splitReportAndConversation(content: string): SplitMessageResult {
   text = text.replace(/(?:\[FROM:\s*[^\]]+\]\s*)?\[TO:\s*[^\]]+\]\s*(?:Task complete\.?)?/gi, '');
   text = text.replace(/^\s*\[TASK\][^\n]*\n?/gmi, '');
 
+  // Lọc sạch các thẻ chỉ đạo <talk>...</talk>, <spawn>...</spawn> và lệnh bracket khỏi conversationText
+  // để text đối thoại với user hiển thị độc lập, không bị bọc trùng bên trong hay bên ngoài thẻ directive
+  text = text.replace(/<\s*spawn\b[^>]*>[\s\S]*?<\/\s*spawn\s*>/gi, '');
+  text = text.replace(/<\s*spawn\b[^>]*\/?>/gi, '');
+  text = text.replace(/<\s*talk\b[^>]*>[\s\S]*?<\/\s*talk\s*>/gi, '');
+  text = text.replace(/<\s*talk\b[^>]*\/?>/gi, '');
+  text = text.replace(/\[SPAWN\][^\n]*\n?/gi, '');
+  text = text.replace(/\[TALK\b[^\]]*\][\s\S]*?(?:\[\/TALK\]|$)/gi, '');
+
   // Khôi phục lại docLines đã được bảo vệ an toàn
   for (let i = 0; i < docLines.length; i++) {
     text = text.replace(`__AF_DOC_LINE_${i}__`, docLines[i]);
@@ -550,225 +724,13 @@ function splitReportAndConversation(content: string): SplitMessageResult {
     text = text.replace(`__AF_CODE_BLOCK_${i}__`, codeBlocks[i]);
   }
 
-  // 4. Extract structured report block if present (XML <report>...</report> or Bracket === TASK REPORT ===)
-  // 4.1. XML Report: <report type="task" status="completed" ...> ... </report>
-  const xmlReportRe = /<(?:\s*(report|task_report|task-report|error_report|error-report))\b([^>]*)>([\s\S]*?)<\/\s*(?:report|task_report|task-report|error_report|error-report)\s*>/iu;
-  const xmlMatch = text.match(xmlReportRe);
-
-  if (xmlMatch && xmlMatch.index !== undefined) {
-    const rawTag = String(xmlMatch[1] || '').toLowerCase();
-    const attrText = xmlMatch[2] || '';
-    const reportContent = xmlMatch[3].trim();
-    const attrs = parseXmlAttributes(attrText);
-    const reportTitle = (attrs['type'] || rawTag.replace(/[-_]+/g, ' ')).toUpperCase();
-
-    const beforeText = text.substring(0, xmlMatch.index).trim();
-    const afterText = text.substring(xmlMatch.index + xmlMatch[0].length).trim();
-    let conversationText = [beforeText, afterText].filter(Boolean).join('\n\n').trim();
-    conversationText = conversationText.replace(/__AF_CODE_BLOCK_(\d+)__/g, (_, idx) => codeBlocks[Number(idx)] || '');
-
-    return {
-      conversationText,
-      hasReport: true,
-      reportTitle: reportTitle.includes('REPORT') ? reportTitle : `${reportTitle} REPORT`,
-      reportContent
-    };
-  }
-
-  // 4.2. Bracket Report: === TASK REPORT === ... === END REPORT ===
-  // Hỗ trợ cả tiền tố trên cùng dòng như "Task complete. === TASK REPORT ==="
-  const reportRe = /(?:^|\n)([^\n]*?)===\s*([A-Z_ ]+REPORT)\s*===[ \t]*\r?\n([\s\S]*?)(?:[ \t]*===\s*END[^\n=]*REPORT\s*===[ \t]*(?:\r?\n|$)|$)/iu;
-  const match = text.match(reportRe);
-
-  if (match && match.index !== undefined) {
-    const linePrefix = (match[1] || '').trim();
-    const reportTitle = match[2].trim();
-    const reportContent = match[3].trim();
-
-    // 3-Tier Structured Validation:
-    // Tier 1: Check for presence of core report markers (AGENT_ID, STATUS, ROLE, WHAT I DID, FILES, REQUIREMENTS)
-    const hasCoreMarker = /\b(?:AGENT_ID|STATUS|ROLE|WHAT I DID|FILES|REQUIREMENTS_CHECKED|ERROR|BUG|VERDICT|KEY_DECISIONS)\s*:/iu.test(reportContent) ||
-      (reportContent.startsWith('{') && reportContent.includes('"agent_id"'));
-    // Tier 2: Check if content has at least 1-2 structured key-value fields or valid JSON
-    const fieldCount = (reportContent.match(/^[A-Z_0-9]+:\s*/gmu) || []).length;
-    const isRealReport = hasCoreMarker && (fieldCount >= 1 || reportContent.startsWith('{'));
-
-    if (isRealReport) {
-      // Everything before and after the report block is conversational text
-      const beforeBase = text.substring(0, match.index).trim();
-      const beforeText = [beforeBase, linePrefix].filter(Boolean).join('\n').trim();
-      const afterText = text.substring(match.index + match[0].length).trim();
-      let conversationText = [beforeText, afterText].filter(Boolean).join('\n\n').trim();
-      conversationText = conversationText.replace(/__AF_CODE_BLOCK_(\d+)__/g, (_, idx) => codeBlocks[Number(idx)] || '');
-
-      return {
-        conversationText,
-        hasReport: true,
-        reportTitle,
-        reportContent
-      };
-    }
-  }
-
+  // 4. Extract structured report block if present: Đã tắt chức năng tách report, xem như render xml bình thường của text
   let conversationText = text.trim().replace(/__AF_CODE_BLOCK_(\d+)__/g, (_, idx) => codeBlocks[Number(idx)] || '');
 
   return {
     conversationText,
     hasReport: false
   };
-}
-
-function ReportCard({ title, content }: { title: string; content: string }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const parsedFields: Array<{ label: string; value: string }> = [];
-
-  const rawTrimmed = (content || '').trim();
-
-  // 1. Try parsing JSON if content is JSON
-  if (rawTrimmed.startsWith('{') && rawTrimmed.endsWith('}')) {
-    try {
-      const obj = JSON.parse(rawTrimmed);
-      for (const [k, v] of Object.entries(obj)) {
-        const valStr = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v);
-        parsedFields.push({ label: k.toUpperCase(), value: valStr });
-      }
-    } catch {}
-  }
-
-  // 2. Try parsing XML tags like <status>...</status> or <files>...</files>
-  if (parsedFields.length === 0 && /<[a-zA-Z_0-9-]+>[\s\S]*?<\/[a-zA-Z_0-9-]+>/.test(rawTrimmed)) {
-    const xmlFieldRe = /<([a-zA-Z_0-9-]+)>([\s\S]*?)<\/\1>/g;
-    let xm: RegExpExecArray | null;
-    while ((xm = xmlFieldRe.exec(rawTrimmed)) !== null) {
-      parsedFields.push({ label: xm[1].toUpperCase().replace(/[-_]+/g, ' '), value: xm[2].trim() });
-    }
-  }
-
-  // 3. Fallback to standard KEY: VALUE line parsing
-  if (parsedFields.length === 0) {
-    const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    let currentLabel = '';
-    let currentValue = '';
-
-    for (const line of lines) {
-      const match = line.match(/^([A-Z_0-9]+):\s*(.*)$/i);
-      if (match) {
-        if (currentLabel) {
-          parsedFields.push({ label: currentLabel.toUpperCase(), value: currentValue.trim() });
-        }
-        currentLabel = match[1];
-        currentValue = match[2] || '';
-      } else {
-        if (currentLabel) {
-          currentValue += (currentValue ? '\n' : '') + line;
-        } else {
-          currentLabel = 'CONTENT';
-          currentValue = line;
-        }
-      }
-    }
-    if (currentLabel) {
-      parsedFields.push({ label: currentLabel.toUpperCase(), value: currentValue.trim() });
-    }
-  }
-
-  return (
-    <div style={{
-      borderRadius: 10,
-      border: '1px solid rgba(148, 163, 184, 0.18)',
-      background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.75) 100%)',
-      backdropFilter: 'blur(10px)',
-      boxShadow: '0 4px 16px rgba(0, 0, 0, 0.25)',
-      margin: '8px 0',
-      overflow: 'hidden'
-    }}>
-      {/* Header */}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: '8px 12px',
-        background: 'rgba(30, 41, 59, 0.85)',
-        borderBottom: '1px solid rgba(148, 163, 184, 0.15)'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 12.5, color: '#e2e8f0' }}>
-          <span>📋</span>
-          <span>{title || 'Structured Task Report'}</span>
-        </div>
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          style={{
-            background: 'rgba(51, 65, 85, 0.6)',
-            border: '1px solid rgba(148, 163, 184, 0.2)',
-            color: '#cbd5e1',
-            borderRadius: 4,
-            padding: '2px 8px',
-            fontSize: 11,
-            cursor: 'pointer'
-          }}
-        >
-          {collapsed ? 'Mở rộng' : 'Thu gọn'}
-        </button>
-      </div>
-
-      {/* Body */}
-      {!collapsed && (
-        <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-          {parsedFields.map((field, fIdx) => {
-            const isStatus = field.label === 'STATUS';
-            const isCompleted = String(field.value || '').toLowerCase().includes('completed') || String(field.value || '').toLowerCase().includes('passed');
-            const isError = String(field.value || '').toLowerCase().includes('blocked') || String(field.value || '').toLowerCase().includes('failed') || String(field.value || '').toLowerCase().includes('error');
-            const isFiles = field.label === 'FILES';
-            
-            return (
-              <div key={fIdx} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
-                  {field.label}:
-                </div>
-                <div style={{ paddingLeft: 4, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
-                  {isStatus ? (
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: 0,
-                      fontWeight: 600,
-                      fontSize: 12,
-                      background: 'transparent',
-                      border: 'none',
-                      color: isCompleted ? '#10b981' : isError ? '#f87171' : 'var(--text-secondary)'
-                    }}>
-                      {isCompleted ? '✓ ' : isError ? '✕ ' : ''}{field.value}
-                    </span>
-                  ) : isFiles ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {field.value.split(/\s*,\s*|\s*\n\s*/).filter(Boolean).map((file, fi) => (
-                        <div key={fi} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          padding: '3px 8px',
-                          borderRadius: 4,
-                          background: 'rgba(255, 255, 255, 0.04)',
-                          fontFamily: 'monospace',
-                          fontSize: 12
-                        }}>
-                          <span style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>📄</span>
-                          <span style={{ color: '#93c5fd' }}>{file.trim()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    renderInlineMarkdown(field.value)
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
@@ -918,25 +880,6 @@ function MarkdownRenderer({ content, isMobile }: { content: string; isMobile?: b
           // Empty line
           if (!trimmed) {
             i++;
-            continue;
-          }
-
-          // Structured Report Block fallback
-          const reportMatch = trimmed.match(/^===\s*([A-Z_ ]+REPORT)\s*===/i);
-          if (reportMatch) {
-            const reportTitle = reportMatch[1].trim();
-            const reportLines: string[] = [];
-            i++; // skip start marker
-            while (i < lines.length && !lines[i].trim().match(/^===\s*END/i)) {
-              reportLines.push(lines[i]);
-              i++;
-            }
-            if (i < lines.length && lines[i].trim().match(/^===\s*END/i)) {
-              i++; // skip end marker
-            }
-            elements.push(
-              <ReportCard key={`report-${i}`} title={reportTitle} content={reportLines.join('\n')} />
-            );
             continue;
           }
 
@@ -2204,12 +2147,15 @@ interface MessageItemProps {
   isMobile?: boolean;
   showToolBlocks?: boolean;
   selectedAgentId?: string | null;
+  queuedMessages?: ChatMsg[];
+  onForceSendSingle?: (msgId: string, content: string, targetId: string) => void;
+  allMessagesList?: any[];
 }
 
-const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, onToggleReport, isMobile = false, showToolBlocks = true, selectedAgentId = null }: MessageItemProps) {
+const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, onToggleReport, isMobile = false, showToolBlocks = true, selectedAgentId = null, queuedMessages = [], onForceSendSingle, allMessagesList = [] }: MessageItemProps) {
   const srcAgent = agents.find(a => a.id === msg.from || a.name === msg.from);
   let targetAgent = agents.find(a => a.id === msg.to || a.name === msg.to);
-  const isUser = msg.from === 'user' || (!msg.from && msg.role === 'user' && !msg.agentId);
+  const isUser = msg.from === 'user' || msg.role === 'user';
   const isOrchestrator = msg.from === 'orchestrator' ||
     agents.some(a => (a.id === msg.from || a.name === msg.from) && (a.role === 'orchestrator' || a.type === 'orchestrator')) ||
     msg.agentRole === 'orchestrator' ||
@@ -2225,9 +2171,66 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   // Lệnh giao task của Orchestrator (spawn/talk do server tạo): render thành CỤC RIÊNG distinct,
   // kèm receiver là agent. KHÔNG lẫn vào bubble chat thường.
   const hasDirectiveInContent = typeof msg.content === 'string' && /(?:\[(?:TALK|SPAWN|TASK)\]|<\s*(?:talk|spawn)\b)/i.test(msg.content);
-  const isOrchestratorTask = (isOrchestrator || msg.from === 'orchestrator') && (
+  
+  const selAgentObj = agents.find(a => a.id === selectedAgentId);
+  const isSelectedOrch = !selectedAgentId || selectedAgentId === 'orchestrator' || selAgentObj?.role === 'orchestrator' || selAgentObj?.type === 'orchestrator';
+  const isSubOrchView = Boolean(selectedAgentId && selectedAgentId !== 'orchestrator' && (selAgentObj?.role === 'orchestrator' || selAgentObj?.type === 'orchestrator'));
+  const isFromCurrentSubOrch = isSubOrchView && (msg.from === selectedAgentId || (srcAgent && srcAgent.id === selectedAgentId) || (selAgentObj && msg.from === selAgentObj.name));
+
+  // Khi ở tab Sub-Orch: CHỈ coi là orchestratorTask do chính Sub-Orch phát ra khi msg.from chính là Sub-Orch đó
+  const isEligibleOrchSender = isSubOrchView
+    ? isFromCurrentSubOrch
+    : (isOrchestrator || msg.from === 'orchestrator');
+
+  // FIX 2: Bóc tách danh sách các directives trong content và kiểm tra trùng lặp từng directive
+  const contentDirectives = useMemo(() => {
+    if (msg.msgType === 'talk') return [];
+    if (!isEligibleOrchSender || typeof msg.content !== 'string') return [];
+    const all = extractAllDirectivesAndText(msg.content);
+    return all;
+  }, [msg.msgType, isEligibleOrchSender, msg.content]);
+
+  // Kiểm tra từng directive xem đã có tin nhắn độc lập tương ứng trong allMessagesList chưa
+  const duplicateDirectivesSet = useMemo(() => {
+    const dups = new Set<number>();
+    if (msg.msgType === 'talk') return dups; // Bản thân msg là tin độc lập
+    if (contentDirectives.length === 0) return dups;
+
+    contentDirectives.forEach((dir, idx) => {
+      if (dir.type === 'text') return; // Không dedup text segment
+      const target = dir.data.target || '';
+      if (!target) return;
+      const isDup = allMessagesList.some((other: any) => {
+        if (other.id === msg.id) return false;
+        if (other.msgType !== 'talk' && !(other.content && /^\s*\[SPAWN\]/i.test(other.content))) return false;
+        const otherTarget = other.to || '';
+        if (otherTarget !== target) return false;
+        const sameSender = other.from === msg.from || (isOrchestrator && (other.from === 'orchestrator' || other.agentRole === 'orchestrator' || agents.some(a => a.id === other.from && (a.role === 'orchestrator' || a.type === 'orchestrator'))));
+        const timeDiff = Math.abs((other.timestamp || 0) - (msg.timestamp || 0));
+        return sameSender && timeDiff < 60000;
+      });
+      if (isDup) {
+        dups.add(idx);
+      }
+    });
+    return dups;
+  }, [msg.id, msg.from, msg.msgType, msg.timestamp, contentDirectives, allMessagesList, isOrchestrator, agents]);
+
+  // Còn ít nhất 1 directive chưa có tin độc lập
+  const activeDirectives = useMemo(() => {
+    return contentDirectives.filter((dir, idx) => {
+      if (dir.type === 'text') return true;
+      return !duplicateDirectivesSet.has(idx);
+    });
+  }, [contentDirectives, duplicateDirectivesSet]);
+
+  const hasDirectiveInItems = contentDirectives.some(d => d.type === 'talk' || d.type === 'spawn');
+  const hasActiveDirectives = activeDirectives.some(d => d.type === 'talk' || d.type === 'spawn');
+  const hasDuplicateIndependentTalk = hasDirectiveInItems && !hasActiveDirectives;
+
+  const isOrchestratorTask = isEligibleOrchSender && (
     (msg.msgType === 'talk' && msg.to && msg.to !== 'user' && msg.to !== 'broadcast') ||
-    (hasDirectiveInContent && msg.to && msg.to !== 'user' && msg.to !== 'broadcast')
+    hasActiveDirectives
   );
   const isSpawnMsg = isOrchestratorTask && (
     (typeof msg.content === 'string' && msg.content.trim().startsWith('[SPAWN]')) ||
@@ -2235,20 +2238,30 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     (typeof msg.content === 'string' && /<\s*spawn\b/i.test(msg.content))
   );
 
-  const selAgentObj = agents.find(a => a.id === selectedAgentId);
-  const isSelectedOrch = !selectedAgentId || selectedAgentId === 'orchestrator' || selAgentObj?.role === 'orchestrator' || selAgentObj?.type === 'orchestrator';
   const isOrchView = isSelectedOrch;
-  const isIncomingToOrch = (isOrchView && !isOrchestrator && !isUser) || (msg.to === 'orchestrator' && !isOrchestrator && !isUser);
+  const isIncomingToOrch = (isOrchView && !isOrchestrator && !isUser) ||
+    (isSubOrchView ? (msg.to === selectedAgentId && !isUser && !isFromCurrentSubOrch) : (msg.to === 'orchestrator' && !isOrchestrator && !isUser));
   const effectiveShowToolBlocks = showToolBlocks && !isIncomingToOrch;
 
-  // Căn lề hai chiều:
+  // Căn lề hai chiều cân bằng Chỉ Đạo (Phải) ⇄ Báo Cáo / Phản Hồi (Trái):
+  // Main view / Sub-Orch view:
+  // - BÊN PHẢI: User ra lệnh (isUser) + Orchestrator/Sub-Orch phát lệnh giao việc/spawn cho Worker (isDirectiveToWorker)
+  // - BÊN TRÁI: Phản hồi trả lời User + Worker báo cáo + Tin đến từ Orchestrator cấp trên + ToolCalls + Thinking
+  // Agent view:
+  // - BÊN PHẢI: Chỉ thị nhận vào từ Orchestrator
+  // - BÊN TRÁI: Tiến trình worker tự sinh (thinking, toolcalls, chat, diff)
   let isAlignRight = false;
-  if (isOrchView) {
-    // Main & Sub-Orchestrator view: User và Orchestrator (outgoing) căn PHẢI; Worker báo cáo (incoming) căn TRÁI
-    isAlignRight = isUser || (msg.from === 'orchestrator' || isOrchestrator || (selectedAgentId && msg.from === selectedAgentId));
+  if (isSubOrchView) {
+    // Nếu tin nhắn gửi đến Sub-Orch này từ bên ngoài (msg.to === selectedAgentId && msg.from !== selectedAgentId):
+    // ĐÂY LÀ TIN ĐẾN (INCOMING), PHẢI CĂN TRÁI.
+    const isDirectiveFromSelf = Boolean(isFromCurrentSubOrch) &&
+      Boolean(isOrchestratorTask || isSpawnMsg || (msg as any).isDirective || (msg.to && msg.to !== 'user' && msg.to !== 'broadcast' && (msg.msgType === 'talk' || hasDirectiveInContent)));
+    isAlignRight = isUser || isDirectiveFromSelf;
+  } else if (isOrchView) {
+    const isDirectiveToWorker = (isOrchestrator || msg.from === 'orchestrator') &&
+      Boolean(isOrchestratorTask || isSpawnMsg || (msg as any).isDirective || (msg.to && msg.to !== 'user' && msg.to !== 'broadcast' && (msg.msgType === 'talk' || hasDirectiveInContent)));
+    isAlignRight = isUser || isDirectiveToWorker;
   } else {
-    // Agent view: Tin do chính agent này sinh ra căn TRÁI.
-    // TẤT CẢ tin nhắn người khác (User, Orchestrator, tin spawn, tin giao việc, agent khác) căn PHẢI.
     const isGeneratedByThisAgent = !!selectedAgentId && (
       msg.from === selectedAgentId ||
       (srcAgent && srcAgent.id === selectedAgentId) ||
@@ -2256,6 +2269,30 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     );
     isAlignRight = !isGeneratedByThisAgent;
   }
+
+  // Resolve task label for header with full defensive guards (đặt trước spawn/talk card để tránh TDZ)
+  let rawTaskStr = '';
+  if (typeof (msg as any)?.task === 'string' && (msg as any).task.trim()) {
+    rawTaskStr = (msg as any).task;
+  } else if (typeof (msg as any)?.taskName === 'string' && (msg as any).taskName.trim()) {
+    rawTaskStr = (msg as any).taskName;
+  } else {
+    // Trích xuất task attribute từ XML <talk> hoặc <spawn> nếu msg.content chứa
+    const xmlTagMatch = typeof msg.content === 'string' ? msg.content.match(/<\s*(?:talk|spawn)\b([^>]*)/i) : null;
+    const tagAttrs = xmlTagMatch ? xmlTagMatch[1] : '';
+    const xmlTaskAttr = tagAttrs ? tagAttrs.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i) : null;
+    if (xmlTaskAttr && (xmlTaskAttr[1] || xmlTaskAttr[2] || xmlTaskAttr[3])) {
+      rawTaskStr = xmlTaskAttr[1] || xmlTaskAttr[2] || xmlTaskAttr[3];
+    } else if (srcAgent && srcAgent.type !== 'orchestrator' && srcAgent.id !== 'orchestrator' && typeof srcAgent.task === 'string' && srcAgent.task.trim()) {
+      rawTaskStr = srcAgent.task;
+    } else if (targetAgent && targetAgent.type !== 'orchestrator' && targetAgent.id !== 'orchestrator' && typeof targetAgent.task === 'string' && targetAgent.task.trim()) {
+      rawTaskStr = targetAgent.task;
+    }
+  }
+
+  const cleanTaskTitle = rawTaskStr
+    ? rawTaskStr.split('\n')[0].replace(/^#?\d+[\.:\s-]*\s*/, '').replace(/^\[(?:working|pending|completed|blocked)\]\s*/i, '').replace(/^(?:⚙️|⏳|✅|⚠️|⚡|🎯)\s*/, '').trim()
+    : '';
 
   let spawnRole = '';
   let spawnAgentName = '';
@@ -2266,6 +2303,52 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
       spawnRole = rawMatch[1] || '';
       spawnAgentName = rawMatch[2] || rawMatch[3] || rawMatch[4] || '';
       spawnTaskDesc = (rawMatch[5] || '').trim();
+    } else {
+      const xmlRole = (msg.content || '').match(/\brole\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+      const xmlName = (msg.content || '').match(/\bname\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+      const xmlTask = (msg.content || '').match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+      const xmlBody = (msg.content || '').match(/<\s*spawn\b[^>]*>([\s\S]*?)<\/\s*spawn\s*>/i);
+      spawnRole = xmlRole ? (xmlRole[1] || xmlRole[2] || xmlRole[3] || '') : ((msg as any).role || '');
+      spawnAgentName = xmlName ? (xmlName[1] || xmlName[2] || xmlName[3] || '') : ((msg as any).name || '');
+      const tDesc = xmlTask ? (xmlTask[1] || xmlTask[2] || xmlTask[3] || '') : '';
+      const bDesc = xmlBody ? xmlBody[1].trim() : '';
+      // FIX 3: Không nuốt toàn bộ content nếu không có task/body
+      spawnTaskDesc = [tDesc, bDesc].filter(Boolean).join('\n\n') || cleanTaskTitle || (msg as any).task || '';
+    }
+  }
+
+  let talkTaskDesc = '';
+  if (isOrchestratorTask && !isSpawnMsg) {
+    const rawContentStr = typeof msg.content === 'string' ? msg.content : '';
+    // 1. Bracket format: [TALK target=... task=... message=...] or [TALK ...]...[/TALK]
+    const bracketMatch = rawContentStr.match(/^\s*\[TALK\b([^\]]*)\]([\s\S]*?)(?:\[\/TALK\])?$/i);
+    if (bracketMatch) {
+      const bAttrs = bracketMatch[1] || '';
+      const bBody = (bracketMatch[2] || '').replace(/\[\/TALK\]\s*$/i, '').trim();
+      const msgMatch = bAttrs.match(/\b(?:message|msg|content)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s\]]+))/i);
+      const taskMatch = bAttrs.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s\]]+))/i);
+      const attrMsg = msgMatch ? (msgMatch[1] || msgMatch[2] || msgMatch[3] || '') : '';
+      const attrTask = taskMatch ? (taskMatch[1] || taskMatch[2] || taskMatch[3] || '') : '';
+      talkTaskDesc = [attrMsg, bBody].filter(Boolean).join('\n\n') || attrTask;
+    }
+    // 2. XML format: <talk target="..." task="...">body</talk> or self-closing <talk target="..." task="..." message="..." />
+    if (!talkTaskDesc) {
+      const hasTalkTag = /<\s*talk\b/i.test(rawContentStr);
+      if (hasTalkTag) {
+        const xmlBodyMatch = rawContentStr.match(/<\s*talk\b[^>]*>([\s\S]*?)<\/\s*talk\s*>/i);
+        const xmlTagMatch = rawContentStr.match(/<\s*talk\b([^>]*)(?:\/?>|<\/\s*talk\s*>)/i);
+        const tagAttrs = xmlTagMatch ? xmlTagMatch[1] : '';
+        const xmlTaskMatch = tagAttrs.match(/\btask\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+        const xmlMsgMatch = tagAttrs.match(/\b(?:message|msg|content)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+        const tAttr = xmlTaskMatch ? (xmlTaskMatch[1] || xmlTaskMatch[2] || xmlTaskMatch[3] || '') : '';
+        const mAttr = xmlMsgMatch ? (xmlMsgMatch[1] || xmlMsgMatch[2] || xmlMsgMatch[3] || '') : '';
+        const bText = xmlBodyMatch ? xmlBodyMatch[1].trim() : '';
+        talkTaskDesc = [mAttr, bText].filter(Boolean).join('\n\n') || tAttr;
+      }
+    }
+    // 3. Fallback: Nếu không phải bracket hay XML, CHỈ dùng (msg as any).task hoặc cleanTaskTitle, tuyệt đối KHÔNG gán toàn bộ rawContentStr
+    if (!talkTaskDesc) {
+      talkTaskDesc = (msg as any).task || cleanTaskTitle || '';
     }
   }
 
@@ -2306,7 +2389,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   }
 
   // Parse and strip internal prompt wrappers ([TEAM]...[/TEAM], [TASK], === INCOMING MESSAGE ===, === SYSTEM REMINDER ===, etc.)
-  let rawContent: string = msg.content || '';
+  let rawContent: string = (msg.content || '').normalize('NFC');
   if (rawContent.includes('=== INCOMING MESSAGE ===') && rawContent.includes('=== MESSAGE ===')) {
     const msgIdx = rawContent.indexOf('=== MESSAGE ===');
     let inner = rawContent.substring(msgIdx + '=== MESSAGE ==='.length);
@@ -2333,7 +2416,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   if (toMatch) {
     toTag = toMatch[1].trim();
   } else {
-    const xmlTalkMatch = rawContent.match(/^\s*<talk\s+[^>]*\btarget\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
+    const xmlTalkMatch = rawContent.match(/<talk\s+[^>]*\btarget\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
     if (xmlTalkMatch) {
       toTag = (xmlTalkMatch[1] || xmlTalkMatch[2] || xmlTalkMatch[3] || '').trim();
     }
@@ -2342,14 +2425,27 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
     .replace(/^\s*(?:\[FROM:\s*[^\]]+\]\s*)?\[TO:\s*[^\]]+\]\s*/iu, '')
     .replace(/^\s*<talk\b[^>]*>\s*/iu, '')
     .replace(/<\/talk>\s*$/iu, '');
+  
+  // FIX 4: Luôn dùng stripTalkTags cho tin nhắn từ Orchestrator/Agent để loại sạch toàn bộ thẻ lẫn body đã tách
   body = isUser ? body : stripTalkTags(body);
+
   if (isOrchestratorInternal && !msg.showOnUI) {
     body = '_(Internal orchestrator planning hidden)_';
   }
-    if (isOrchestratorTask && !isOpenCode) {
-      // Khi đã render thành thẻ Giao việc / Directive Card, nếu không còn nội dung trao đổi ngoài thì dọn sạch để không in đè text rác
-      body = body.replace(/^[ \t]*(?:=== AGENT MESSAGE ===[\s\S]*?=== END MESSAGE ===|\[TALK[^\]]*\][\s\S]*?\[\/TALK\]|<\s*talk\b[^>]*>[\s\S]*?<\/\s*talk\s*>)\s*/gmi, '').trim();
-    }
+  if (isOrchestratorTask && !isOpenCode) {
+    // Khi đã render thành thẻ Giao việc / Directive Card, nếu không còn nội dung trao đổi ngoài thì dọn sạch để không in đè text rác
+    body = body.replace(/^[ \t]*(?:=== AGENT MESSAGE ===[\s\S]*?=== END MESSAGE ===|\[TALK[^\]]*\][\s\S]*?\[\/TALK\]|<\s*talk\b[^>]*>[\s\S]*?<\/\s*talk\s*>|\[SPAWN\][\s\S]*?(?=(?:\[SPAWN\]|\[TALK\]|<\s*(?:talk|spawn)|$))|<\s*spawn\b[^>]*>[\s\S]*?<\/\s*spawn\s*>|<\s*spawn\b[^>]*\/>)\s*/gmi, '').trim();
+    // Loại bỏ triệt để các directive tag <spawn ...>...</spawn>, <spawn .../> khỏi body để không sinh bubble text thừa
+    body = body.replace(/<\s*spawn\b[^>]*>[\s\S]*?<\/\s*spawn\s*>/gmi, '').replace(/<\s*spawn\b[^>]*\/>/gmi, '').trim();
+  }
+  // Nếu tin nhắn là Spawn message hoặc chỉ chứa duy nhất lệnh Spawn/Talk, loại bỏ body text rác để không sinh thêm bubble text thứ 2
+  if ((isSpawnMsg || contentDirectives.some(d => d.type === 'spawn')) && !isOpenCode) {
+    body = '';
+  }
+  // Nếu đã render các directive/text theo thứ tự trong activeDirectives, tránh render lặp lại conversationText/body ở cuối
+  if (hasActiveDirectives && !isOpenCode) {
+    body = '';
+  }
   const effectiveTo = msg.to && msg.to !== 'user' ? msg.to : toTag;
 
   // Resolve target display
@@ -2365,23 +2461,10 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         displayTo = targetAgent.name;
       }
     }
+  } else if (!effectiveTo && isOrchestrator && !isUser) {
+    // Nếu Orchestrator/Sub-Orchestrator nói chung không chỉ định người nhận riêng, mặc định là trả lời You
+    displayTo = 'You';
   }
-
-  // Resolve task label for header with full defensive guards
-  let rawTaskStr = '';
-  if (typeof (msg as any)?.task === 'string' && (msg as any).task.trim()) {
-    rawTaskStr = (msg as any).task;
-  } else if (typeof (msg as any)?.taskName === 'string' && (msg as any).taskName.trim()) {
-    rawTaskStr = (msg as any).taskName;
-  } else if (srcAgent && srcAgent.type !== 'orchestrator' && srcAgent.id !== 'orchestrator' && typeof srcAgent.task === 'string' && srcAgent.task.trim()) {
-    rawTaskStr = srcAgent.task;
-  } else if (targetAgent && targetAgent.type !== 'orchestrator' && targetAgent.id !== 'orchestrator' && typeof targetAgent.task === 'string' && targetAgent.task.trim()) {
-    rawTaskStr = targetAgent.task;
-  }
-
-  const cleanTaskTitle = rawTaskStr
-    ? rawTaskStr.split('\n')[0].replace(/^#?\d+[\.:\s-]*\s*/, '').replace(/^\[(?:working|pending|completed|blocked)\]\s*/i, '').replace(/^(?:⚙️|⏳|✅|⚠️|⚡|🎯)\s*/, '').trim()
-    : '';
 
   // Visual Bubble Themes — Full Flat Conversation Style (Cursor / Claude / v0 style)
   let bubbleBg = 'linear-gradient(135deg, rgba(30, 41, 59, 0.75) 0%, rgba(15, 23, 42, 0.75) 100%)';
@@ -2437,10 +2520,12 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   const formattedTime = formatTimestamp(msg.timestamp);
   const fullDateTime = formatFullDate(msg.timestamp);
 
+  const normBody = (body || '').normalize('NFC');
   // Split conversation text and structured report card
   const splitResult = useMemo(() => {
-    return isUser ? { conversationText: body, hasReport: false } : splitReportAndConversation(body);
-  }, [body, isUser]);
+    if (isSpawnMsg || hasActiveDirectives || contentDirectives.some(d => d.type === 'spawn')) return { conversationText: '', hasReport: false };
+    return isUser ? { conversationText: normBody, hasReport: false } : splitReportAndConversation(normBody);
+  }, [normBody, isUser, isSpawnMsg, hasActiveDirectives, contentDirectives]);
 
   const { conversationText, hasReport, reportTitle, reportContent } = splitResult;
 
@@ -2454,7 +2539,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
   const hasThinkingInParts = hasParts && ((msg as any).parts as any[]).some((p: any) => p && p.type === 'thinking' && String(p.content || '').trim().length > 0);
   const isRawCommandOutput = isOpenCode && /(?:<talk\s+|<spawn\s+|\[TALK\s+|\[SPAWN\s+|===\s*(?:TASK|ERROR|VERIFICATION)\s+REPORT\s*===)/i.test(msg.content || '');
   // Guard bubble rỗng: message chỉ có thinking/toolCall (content rỗng) KHÔNG tạo bubble text rỗng (cục tròn)
-  const hasBubbleContent = !!body && String(body).trim().length > 0;
+  const hasBubbleContent = (!!body && String(body).trim().length > 0) || isOrchestratorTask || (!!conversationText && conversationText.trim().length > 0) || (!!talkTaskDesc && talkTaskDesc.trim().length > 0);
 
   // Ẩn tin nội bộ: (1) orchestrator gửi lệnh nội bộ, (2) system broadcast nội bộ cho orchestrator
   // (from:'system' + to:'orchestrator' + msgType:'internal' do forwardToOrchestrator tạo).
@@ -2477,6 +2562,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                      !!(hasReport && reportContent && reportContent.trim()) || 
                      !!(body && body.trim()) ||
                      !!(spawnTaskDesc && spawnTaskDesc.trim()) ||
+                     !!(talkTaskDesc && talkTaskDesc.trim()) ||
                      !!(cleanTaskTitle && cleanTaskTitle.trim());
   // Đảm bảo tin nhắn giao việc (isOrchestratorTask) KHÔNG BAO GIỜ bị nuốt bởi guard rỗng
   const hasAnyContent = hasAnyText || hasAnyThinking || hasToolBlocks || hasParts || isOrchestratorTask;
@@ -2492,6 +2578,8 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         display: 'flex',
         flexDirection: 'column',
         alignItems: isAlignRight ? 'flex-end' : 'flex-start',
+        alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+        width: '100%',
         minWidth: 0,
         overflowWrap: 'anywhere',
         // Fix copy 6.33: chặn selection lan sang cả khối (sender header/tool thinking header là
@@ -2505,6 +2593,8 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
       <div style={{
         display: 'flex',
         alignItems: 'center',
+        justifyContent: isAlignRight ? 'flex-end' : 'flex-start',
+        alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
         gap: 8,
         fontSize: 11,
         marginBottom: 6,
@@ -2518,23 +2608,26 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         scrollbarWidth: 'none'
       }}>
         {/* Sender Capsule Pill */}
-        <span style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '3px 10px',
-          borderRadius: 9999,
-          fontSize: 11,
-          fontWeight: 700,
-          whiteSpace: 'nowrap',
-          background: '#0f172a',
-          border: isUser
-            ? '1px solid rgba(96, 165, 250, 0.6)'
-            : isOrchestrator
-            ? '1px solid rgba(129, 140, 248, 0.6)'
-            : '1px solid rgba(52, 211, 153, 0.6)',
-          color: isUser ? '#93c5fd' : isOrchestrator ? '#c7d2fe' : '#6ee7b7'
-        }}>
+        <span
+          className={`af-sender-pill ${isUser ? 'af-sender-user' : isOrchestrator ? 'af-sender-orch' : 'af-sender-worker'}`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 10px',
+            borderRadius: 9999,
+            fontSize: 11,
+            fontWeight: 700,
+            whiteSpace: 'nowrap',
+            background: '#0f172a',
+            border: isUser
+              ? '1px solid rgba(96, 165, 250, 0.6)'
+              : isOrchestrator
+              ? '1px solid rgba(129, 140, 248, 0.6)'
+              : '1px solid rgba(52, 211, 153, 0.6)',
+            color: isUser ? '#93c5fd' : isOrchestrator ? '#c7d2fe' : '#6ee7b7'
+          }}
+        >
           {isOrchestrator && <span>👑</span>}
           {isUser && <span>👤</span>}
           {!isOrchestrator && !isUser && <span>🤖</span>}
@@ -2547,20 +2640,23 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         {/* Direction Arrow & Receiver Capsule Pill */}
         {displayTo && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <span style={{ color: '#818cf8', fontWeight: 800, fontSize: 13, lineHeight: 1 }}>➜</span>
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '3px 10px',
-              borderRadius: 9999,
-              fontSize: 11,
-              fontWeight: 700,
-              whiteSpace: 'nowrap',
-              background: '#0f172a',
-              border: '1px solid #334155',
-              color: '#f8fafc'
-            }}>
+            <span className="af-receiver-arrow" style={{ color: '#818cf8', fontWeight: 800, fontSize: 13, lineHeight: 1 }}>➜</span>
+            <span
+              className="af-receiver-pill"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '3px 10px',
+                borderRadius: 9999,
+                fontSize: 11,
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+                background: '#0f172a',
+                border: '1px solid #334155',
+                color: '#f8fafc'
+              }}
+            >
               {String(displayTo || '').toLowerCase() === 'you' || String(displayTo || '').toLowerCase() === 'user' ? <span>👤</span> : <span>🤖</span>}
               <span>{displayTo}</span>
             </span>
@@ -2596,6 +2692,48 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           </span>
         )}
 
+        {/* Queued Status & Force Send Button on Bubble Header */}
+        {(() => {
+          const queuedItem = queuedMessages.find(q => q.id === msg.id);
+          if (!queuedItem) return null;
+          return (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '2px 6px',
+                borderRadius: 4,
+                background: 'rgba(245, 158, 11, 0.15)',
+                border: '1px solid rgba(245, 158, 11, 0.35)',
+                fontSize: 10.5,
+                color: '#fde68a',
+                flexShrink: 0
+              }}
+            >
+              <span>⏳ Đang trong hàng đợi</span>
+              {onForceSendSingle && (
+                <button
+                  onClick={() => onForceSendSingle(queuedItem.id, queuedItem.content, queuedItem.to || selectedAgentId || 'orchestrator')}
+                  style={{
+                    background: 'rgba(245, 158, 11, 0.3)',
+                    border: '1px solid rgba(245, 158, 11, 0.6)',
+                    color: '#fff',
+                    borderRadius: 3,
+                    padding: '1px 5px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                  title="Ngắt lượt hiện tại và gửi ngay tin này"
+                >
+                  ⚡ Gửi ngay
+                </button>
+              )}
+            </span>
+          );
+        })()}
+
         {/* Monospace Timestamp */}
         {formattedTime && (
           <span
@@ -2623,7 +2761,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
-          maxWidth: isMobile ? '98%' : '100%',
+          maxWidth: '100%',
           alignSelf: isUser ? 'flex-end' : 'flex-start',
           marginBottom: 4,
           userSelect: 'text'
@@ -2637,9 +2775,10 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         <div style={{
           display: 'flex',
           flexDirection: 'column',
-          width: '100%',
-          maxWidth: isMobile ? '98%' : '100%',
-          alignSelf: isUser ? 'flex-end' : 'flex-start',
+          width: isMobile ? '100%' : '58%',
+          minWidth: isMobile ? '100%' : '52%',
+          maxWidth: isMobile ? '100%' : '95%',
+          alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
           marginBottom: 4,
           userSelect: 'text'
         }}>
@@ -2666,9 +2805,10 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
         <div style={{
           display: 'flex',
           flexDirection: 'column',
-          width: '100%',
-          maxWidth: isMobile ? '98%' : '100%',
-          alignSelf: isUser ? 'flex-end' : 'flex-start',
+          width: isMobile ? '100%' : '58%',
+          minWidth: isMobile ? '100%' : '52%',
+          maxWidth: isMobile ? '100%' : '95%',
+          alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
           gap: 4,
           userSelect: 'text'
         }}>
@@ -2682,7 +2822,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                 output: part.output === undefined || part.output === null ? undefined : String(part.output)
               };
               return (
-                <div key={'pt-' + i} style={{ width: '100%', maxWidth: isMobile ? '98%' : '100%' }}>
+                <div key={'pt-' + i} style={{ width: '100%', maxWidth: '100%' }}>
                   <ToolBlockSafe>
                     <ToolCallBlock tool={safeTool.tool} input={safeTool.input} output={safeTool.output} isMobile={isMobile} />
                   </ToolBlockSafe>
@@ -2694,7 +2834,7 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
               const thinkContent = String(part.content || '').trim();
               if (!thinkContent) return null;
               return (
-                <div key={'pt-' + i} style={{ width: '100%', maxWidth: isMobile ? '98%' : '100%' }}>
+                <div key={'pt-' + i} style={{ width: '100%', maxWidth: '100%' }}>
                   <ThinkingBlock thinking={thinkContent} />
                 </div>
               );
@@ -2710,7 +2850,198 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
             if (isOpenCode && /^[A-Z_]+:\s/u.test(segText) && !/^✖|^◆/u.test(segText)) {
               segText = segText.replace(/^[A-Z_]+:\s?/u, '');
             }
-            // Gọt sạch các thẻ lệnh điều phối (<talk>, <spawn>) nếu lọt vào segment text
+
+            // Kiểm tra xem segment này có chứa thẻ điều phối (<spawn> hoặc <talk>) không
+            const hasDirectiveInPart = /(?:\[(?:TALK|SPAWN|TASK)\]|<\s*(?:talk|spawn)\b)/i.test(segText);
+
+            if (hasDirectiveInPart && isEligibleOrchSender) {
+              const items = extractAllDirectivesAndText(segText);
+
+              return (
+                <React.Fragment key={'pt-' + i}>
+                  {items.map((item, subIdx) => {
+                    if (item.type === 'text') {
+                      const cleanT = stripTalkTags(item.text).trim();
+                      if (!cleanT) return null;
+                      return (
+                        <div
+                          key={`pt-${i}-txt-${subIdx}`}
+                          className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+                          style={{
+                            background: bubbleBg,
+                            color: textColor,
+                            padding: '10px 14px',
+                            borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                            width: 'fit-content',
+                            maxWidth: isMobile ? '96%' : '82%',
+                            minWidth: 0,
+                            overflowWrap: 'anywhere',
+                            boxSizing: 'border-box',
+                            fontSize: 12.5,
+                            lineHeight: 1.45,
+                            whiteSpace: 'normal',
+                            fontFamily: 'inherit',
+                            border: bubbleBorder,
+                            boxShadow: bubbleShadow,
+                            wordBreak: 'break-word',
+                            position: 'relative',
+                            alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                            marginLeft: isAlignRight ? 'auto' : undefined,
+                            marginRight: isAlignRight ? undefined : 'auto',
+                            marginBottom: 4
+                          }}
+                        >
+                          <MarkdownRenderer content={cleanT} isMobile={isMobile} />
+                        </div>
+                      );
+                    }
+
+                    if (item.type === 'spawn') {
+                      const pSpawnRole = item.data.role || '';
+                      const pSpawnAgentName = item.data.name || '';
+                      const pSpawnTaskDesc = item.data.task || cleanTaskTitle || '';
+                      const displayTargetName = pSpawnAgentName || pSpawnRole || 'Agent';
+
+                      return (
+                        <div
+                          key={`pt-${i}-sp-${subIdx}`}
+                          className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+                          style={{
+                            background: bubbleBg,
+                            color: textColor,
+                            padding: '10px 14px',
+                            borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                            width: 'fit-content',
+                            maxWidth: isMobile ? '96%' : '82%',
+                            minWidth: 0,
+                            overflowWrap: 'anywhere',
+                            boxSizing: 'border-box',
+                            fontSize: 12.5,
+                            lineHeight: 1.45,
+                            whiteSpace: 'normal',
+                            fontFamily: 'inherit',
+                            border: bubbleBorder,
+                            boxShadow: bubbleShadow,
+                            wordBreak: 'break-word',
+                            position: 'relative',
+                            alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                            marginLeft: isAlignRight ? 'auto' : undefined,
+                            marginRight: isAlignRight ? undefined : 'auto',
+                            marginBottom: 4
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 360, maxWidth: isMobile ? '100%' : '85%' }}>
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 8,
+                              paddingBottom: 6,
+                              borderBottom: '1px solid rgba(168, 85, 247, 0.25)'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: 14 }}>🚀</span>
+                                <span style={{ fontWeight: 800, fontSize: 11.5, letterSpacing: '0.04em', color: '#c084fc', textTransform: 'uppercase' }}>
+                                  Spawn Agent
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                {pSpawnRole && (
+                                  <span style={{ padding: '1px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 700, background: 'rgba(168, 85, 247, 0.25)', border: '1px solid rgba(192, 132, 252, 0.5)', color: '#f3e8ff' }}>
+                                    {pSpawnRole}
+                                  </span>
+                                )}
+                                <span style={{ fontSize: 11.5, fontWeight: 700, color: '#e9d5ff' }}>
+                                  {displayTargetName}
+                                </span>
+                              </div>
+                            </div>
+                            <div style={{ background: 'rgba(15, 23, 42, 0.45)', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                                <span style={{ color: '#c084fc', fontSize: 12, marginTop: 1 }}>📋</span>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <MarkdownRenderer content={pSpawnTaskDesc || item.raw} isMobile={isMobile} />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (item.type === 'talk') {
+                      const pTalkTarget = item.data.target || '';
+                      const pTalkTaskDesc = item.data.task || '';
+                      const displayTargetName = pTalkTarget || displayTo || 'Agent';
+
+                      return (
+                        <div
+                          key={`pt-${i}-tk-${subIdx}`}
+                          className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+                          style={{
+                            background: bubbleBg,
+                            color: textColor,
+                            padding: '10px 14px',
+                            borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                            width: 'fit-content',
+                            maxWidth: isMobile ? '96%' : '82%',
+                            minWidth: 0,
+                            overflowWrap: 'anywhere',
+                            boxSizing: 'border-box',
+                            fontSize: 12.5,
+                            lineHeight: 1.45,
+                            whiteSpace: 'normal',
+                            fontFamily: 'inherit',
+                            border: bubbleBorder,
+                            boxShadow: bubbleShadow,
+                            wordBreak: 'break-word',
+                            position: 'relative',
+                            alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                            marginLeft: isAlignRight ? 'auto' : undefined,
+                            marginRight: isAlignRight ? undefined : 'auto',
+                            marginBottom: 4
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 360, maxWidth: isMobile ? '100%' : '85%' }}>
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 8,
+                              paddingBottom: 6,
+                              borderBottom: '1px solid rgba(99, 102, 241, 0.25)'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: 14 }}>🎯</span>
+                                <span style={{ fontWeight: 800, fontSize: 11.5, letterSpacing: '0.04em', color: '#818cf8', textTransform: 'uppercase' }}>
+                                  Giao Việc
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700 }}>
+                                <span style={{ padding: '2px 8px', borderRadius: 6, background: '#0f172a', border: '1px solid rgba(129, 140, 248, 0.5)', color: '#c7d2fe' }}>
+                                  👑 {srcAgent?.name || 'Orchestrator'}
+                                </span>
+                                <span style={{ color: '#818cf8', fontSize: 12 }}>➔</span>
+                                <span style={{ padding: '2px 8px', borderRadius: 6, background: '#0f172a', border: '1px solid rgba(148, 163, 184, 0.4)', color: '#f8fafc' }}>
+                                  🤖 {displayTargetName}
+                                </span>
+                              </div>
+                            </div>
+                            <div style={{ background: 'rgba(15, 23, 42, 0.4)', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(99, 102, 241, 0.18)' }}>
+                              <MarkdownRenderer content={pTalkTaskDesc || item.raw} isMobile={isMobile} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return null;
+                  })}
+                </React.Fragment>
+              );
+            }
+
+            // Gọt sạch các thẻ lệnh điều phối (<talk>, <spawn>) nếu lọt vào segment text thường
             segText = stripTalkTags(segText);
             if (!String(segText).trim()) return null;
 
@@ -2729,51 +3060,25 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
                 background: bubbleBg,
                 color: textColor,
                 padding: '10px 14px',
-                borderRadius: 12,
+                borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
                 width: 'fit-content',
-                maxWidth: '100%',
+                maxWidth: isMobile ? '96%' : '82%',
                 minWidth: 0,
                 overflowWrap: 'anywhere',
                 boxSizing: 'border-box',
                 fontSize: isOpenCode ? 12 : (isMobile ? 12 : 12.5),
                 lineHeight: 1.45,
-                whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
-                fontFamily: isOpenCode ? 'monospace' : 'inherit',
+                whiteSpace: 'normal',
+                fontFamily: 'inherit',
                 border: bubbleBorder,
                 boxShadow: bubbleShadow,
                 wordBreak: 'break-word',
-                position: 'relative'
+                position: 'relative',
+                alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                marginLeft: isAlignRight ? 'auto' : undefined,
+                marginRight: isAlignRight ? undefined : 'auto'
               }}>
-                {isOpenCode ? (
-                  segHasReport && segReportContent ? (
-                    <>
-                      {segConvText ? <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: 10 }}>{segConvText}</div> : null}
-                      <ReportCard
-                        title={segReportTitle || 'Structured Task Report'}
-                        content={segReportContent}
-                      />
-                    </>
-                  ) : (
-                    <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                      {segText}
-                    </div>
-                  )
-                ) : (
-                  <>
-                    {segConvText ? <MarkdownRenderer content={segConvText} isMobile={isMobile} /> : null}
-                    {segHasReport && segReportContent ? (
-                      <div style={{ marginTop: segConvText ? 10 : 0 }}>
-                        <ReportCard
-                          title={segReportTitle || 'Structured Task Report'}
-                          content={segReportContent}
-                        />
-                      </div>
-                    ) : null}
-                    {!segConvText && !segHasReport && segText ? (
-                      <MarkdownRenderer content={segText} isMobile={isMobile} />
-                    ) : null}
-                  </>
-                )}
+                <MarkdownRenderer content={segConvText || segText} isMobile={isMobile} />
               </div>
             );
           })}
@@ -2781,196 +3086,328 @@ const MessageItem = React.memo(function MessageItem({ msg, agents, isCollapsed, 
       )}
 
       {/* Khối 3: Bubble text — dạng flat stream chuyên nghiệp. Chỉ render khi có nội dung text thật */}
-      {!hasParts && (hasBubbleContent && (!isOpenCode || !isRawCommandOutput || (!hasToolBlocks && (!msg.thinking || !String(msg.thinking).trim())))) && (
+      {!hasParts && ((hasBubbleContent || isOrchestratorTask) && (!isOpenCode || !isRawCommandOutput || (!hasToolBlocks && (!msg.thinking || !String(msg.thinking).trim())))) && (
         <div
-          className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
           style={{
-          background: bubbleBg,
-          color: textColor,
-          padding: '10px 14px',
-          borderRadius: 12,
-          width: 'fit-content',
-          maxWidth: isMobile ? '98%' : '100%',
-          minWidth: 0,
-          overflowWrap: 'anywhere',
-          boxSizing: 'border-box',
-          fontSize: isOpenCode ? 12 : 12.5,
-          lineHeight: 1.45,
-          whiteSpace: isOpenCode ? 'pre-wrap' : 'normal',
-          fontFamily: isOpenCode ? 'monospace' : 'inherit',
-          border: bubbleBorder,
-          boxShadow: bubbleShadow,
-          wordBreak: 'break-word',
-          position: 'relative',
-          userSelect: 'text'
-        }}>
-          {isOrchestratorTask ? (
-            isSpawnMsg ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 320 }}>
-                {/* Header Card SPAWN AGENT */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  paddingBottom: 6,
-                  borderBottom: '1px solid rgba(168, 85, 247, 0.25)'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 14 }}>🚀</span>
-                    <span style={{
-                      fontWeight: 800,
-                      fontSize: 11.5,
-                      letterSpacing: '0.04em',
-                      color: '#c084fc',
-                      textTransform: 'uppercase'
-                    }}>
-                      Spawn Agent
-                    </span>
+            display: 'flex',
+            flexDirection: 'column',
+            width: '100%',
+            maxWidth: '100%',
+            alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+            alignItems: isAlignRight ? 'flex-end' : 'flex-start',
+            gap: 6,
+            userSelect: 'text'
+          }}
+        >
+          {/* A. Render tuần tự theo đúng thứ tự xuất hiện của từng Directive/Text item */}
+          {activeDirectives.length > 0 ? (
+            activeDirectives.map((dir, dIdx) => {
+              if (dir.type === 'text') {
+                const cleanT = stripTalkTags(dir.text || dir.data?.raw || '').trim();
+                if (!cleanT) return null;
+                return (
+                  <div
+                    key={`msg-dir-txt-${dIdx}`}
+                    className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+                    style={{
+                      background: isOrchestratorTask ? 'rgba(30, 41, 59, 0.65)' : bubbleBg,
+                      color: textColor,
+                      padding: '10px 14px',
+                      borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                      width: 'fit-content',
+                      maxWidth: isMobile ? '96%' : '82%',
+                      minWidth: 0,
+                      overflowWrap: 'anywhere',
+                      boxSizing: 'border-box',
+                      fontSize: isOpenCode ? 12 : 12.5,
+                      lineHeight: 1.45,
+                      whiteSpace: 'normal',
+                      fontFamily: 'inherit',
+                      border: isOrchestratorTask ? '1px solid rgba(148, 163, 184, 0.2)' : bubbleBorder,
+                      boxShadow: bubbleShadow,
+                      wordBreak: 'break-word',
+                      position: 'relative',
+                      userSelect: 'text',
+                      alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                      marginLeft: isAlignRight ? 'auto' : undefined,
+                      marginRight: isAlignRight ? undefined : 'auto'
+                    }}
+                  >
+                    <MarkdownRenderer content={cleanT} isMobile={isMobile} />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {spawnRole && (
-                      <span style={{
-                        padding: '1px 7px',
-                        borderRadius: 4,
-                        fontSize: 10.5,
-                        fontWeight: 700,
-                        background: 'rgba(168, 85, 247, 0.25)',
-                        border: '1px solid rgba(192, 132, 252, 0.5)',
-                        color: '#f3e8ff'
+                );
+              }
+
+              if (dir.type === 'spawn') {
+                const curRole = dir.data.role || '';
+                const curName = dir.data.name || '';
+                const curTask = dir.data.task || cleanTaskTitle || '';
+                const dTarget = curName || curRole || 'New Agent';
+
+                return (
+                  <div
+                    key={`msg-dir-sp-${dIdx}`}
+                    className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+                    style={{
+                      background: bubbleBg,
+                      color: textColor,
+                      padding: '10px 14px',
+                      borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                      width: 'fit-content',
+                      maxWidth: isMobile ? '96%' : '82%',
+                      minWidth: 0,
+                      overflowWrap: 'anywhere',
+                      boxSizing: 'border-box',
+                      fontSize: isOpenCode ? 12 : 12.5,
+                      lineHeight: 1.45,
+                      whiteSpace: 'normal',
+                      fontFamily: 'inherit',
+                      border: bubbleBorder,
+                      boxShadow: bubbleShadow,
+                      wordBreak: 'break-word',
+                      position: 'relative',
+                      userSelect: 'text',
+                      alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                      marginLeft: isAlignRight ? 'auto' : undefined,
+                      marginRight: isAlignRight ? undefined : 'auto'
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 360, maxWidth: isMobile ? '100%' : '85%' }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        paddingBottom: 6,
+                        borderBottom: '1px solid rgba(168, 85, 247, 0.25)'
                       }}>
-                        {spawnRole}
-                      </span>
-                    )}
-                    <span style={{
-                      fontSize: 11.5,
-                      fontWeight: 700,
-                      color: '#e9d5ff'
-                    }}>
-                      {spawnAgentName || displayTo || 'New Agent'}
-                    </span>
-                  </div>
-                </div>
-                {/* Body Card SPAWN: Tiêu đề & Hướng dẫn */}
-                <div style={{
-                  background: 'rgba(15, 23, 42, 0.45)',
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(168, 85, 247, 0.2)'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                    <span style={{ color: '#c084fc', fontSize: 12, marginTop: 1 }}>📋</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <MarkdownRenderer content={spawnTaskDesc || conversationText || body} isMobile={isMobile} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 14 }}>🚀</span>
+                          <span style={{ fontWeight: 800, fontSize: 11.5, letterSpacing: '0.04em', color: '#c084fc', textTransform: 'uppercase' }}>
+                            Spawn Agent
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {curRole && (
+                            <span style={{ padding: '1px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 700, background: 'rgba(168, 85, 247, 0.25)', border: '1px solid rgba(192, 132, 252, 0.5)', color: '#f3e8ff' }}>
+                              {curRole}
+                            </span>
+                          )}
+                          <span className="af-spawn-target-name" style={{ fontSize: 11.5, fontWeight: 700, color: '#e9d5ff' }}>
+                            {dTarget}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ background: 'rgba(15, 23, 42, 0.45)', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                          <span style={{ color: '#c084fc', fontSize: 12, marginTop: 1 }}>📋</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <MarkdownRenderer content={curTask || dir.raw} isMobile={isMobile} />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 300 }}>
-                {/* Header Card GIAO VIỆC */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  paddingBottom: 6,
-                  borderBottom: '1px solid rgba(99, 102, 241, 0.25)'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 14 }}>🎯</span>
-                    <span style={{
-                      fontWeight: 800,
-                      fontSize: 11.5,
-                      letterSpacing: '0.04em',
-                      color: '#818cf8',
-                      textTransform: 'uppercase'
-                    }}>
-                      Giao Việc
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700 }}>
-                    <span style={{
-                      padding: '2px 8px',
-                      borderRadius: 6,
-                      background: '#0f172a',
-                      border: '1px solid rgba(129, 140, 248, 0.5)',
-                      color: '#c7d2fe'
-                    }}>
-                      👑 {srcAgent?.name || (msg.agentRole === 'orchestrator' ? 'Orchestrator' : 'Orchestrator')}
-                    </span>
-                    <span style={{ color: '#818cf8', fontSize: 12 }}>➔</span>
-                    <span style={{
-                      padding: '2px 8px',
-                      borderRadius: 6,
-                      background: '#0f172a',
-                      border: '1px solid rgba(148, 163, 184, 0.4)',
-                      color: '#f8fafc'
-                    }}>
-                      🤖 {displayTo || 'Agent'}
-                    </span>
-                  </div>
-                </div>
-                {/* Body Card GIAO VIỆC */}
-                <div style={{
-                  background: 'rgba(15, 23, 42, 0.4)',
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(99, 102, 241, 0.18)'
-                }}>
-                  {cleanTaskTitle && (
+                );
+              }
+
+              // dir.type === 'talk'
+              const curTarget = dir.data.target || displayTo || 'Agent';
+              const curTask = dir.data.task || '';
+
+              return (
+                <div
+                  key={`msg-dir-tk-${dIdx}`}
+                  className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+                  style={{
+                    background: bubbleBg,
+                    color: textColor,
+                    padding: '10px 14px',
+                    borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                    width: 'fit-content',
+                    maxWidth: isMobile ? '96%' : '82%',
+                    minWidth: 0,
+                    overflowWrap: 'anywhere',
+                    boxSizing: 'border-box',
+                    fontSize: isOpenCode ? 12 : 12.5,
+                    lineHeight: 1.45,
+                    whiteSpace: 'normal',
+                    fontFamily: 'inherit',
+                    border: bubbleBorder,
+                    boxShadow: bubbleShadow,
+                    wordBreak: 'break-word',
+                    position: 'relative',
+                    userSelect: 'text',
+                    alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                    marginLeft: isAlignRight ? 'auto' : undefined,
+                    marginRight: isAlignRight ? undefined : 'auto'
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 360, maxWidth: isMobile ? '100%' : '85%' }}>
                     <div style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: 6,
-                      marginBottom: 6,
-                      fontSize: 11.5,
-                      fontWeight: 700,
-                      color: '#93c5fd'
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      paddingBottom: 6,
+                      borderBottom: '1px solid rgba(99, 102, 241, 0.25)'
                     }}>
-                      <span>📌</span>
-                      <span>{cleanTaskTitle}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 14 }}>🎯</span>
+                        <span style={{ fontWeight: 800, fontSize: 11.5, letterSpacing: '0.04em', color: '#818cf8', textTransform: 'uppercase' }}>
+                          Giao Việc
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700 }}>
+                        <span className="af-directive-header-orch" style={{ padding: '2px 8px', borderRadius: 6, background: '#0f172a', border: '1px solid rgba(129, 140, 248, 0.5)', color: '#c7d2fe' }}>
+                          👑 {srcAgent?.name || (msg.agentRole === 'orchestrator' ? 'Orchestrator' : 'Orchestrator')}
+                        </span>
+                        <span style={{ color: '#818cf8', fontSize: 12 }}>➔</span>
+                        <span className="af-directive-header-target" style={{ padding: '2px 8px', borderRadius: 6, background: '#0f172a', border: '1px solid rgba(148, 163, 184, 0.4)', color: '#f8fafc' }}>
+                          🤖 {curTarget}
+                        </span>
+                      </div>
                     </div>
-                  )}
-                  <MarkdownRenderer content={conversationText || body || (typeof msg.content === 'string' ? msg.content : '') || cleanTaskTitle} isMobile={isMobile} />
-                </div>
-              </div>
-            )
-          ) : isOpenCode ? (
-            hasReport && reportContent ? (
-              <>
-                {conversationText ? (
-                  <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: 10 }}>
-                    {conversationText}
+                    <div style={{ background: 'rgba(15, 23, 42, 0.4)', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(99, 102, 241, 0.18)' }}>
+                      <MarkdownRenderer content={curTask || dir.raw} isMobile={isMobile} />
+                    </div>
                   </div>
-                ) : null}
-                <ReportCard
-                  title={reportTitle || 'Structured Task Report'}
-                  content={reportContent}
-                />
-              </>
-            ) : (
-              <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {body}
-              </div>
-            )
-          ) : (
-            <>
-              {conversationText ? (
-                <MarkdownRenderer content={conversationText} isMobile={isMobile} />
-              ) : null}
-              {hasReport && reportContent ? (
-                <div style={{ marginTop: conversationText ? 10 : 0 }}>
-                  <ReportCard
-                    title={reportTitle || 'Structured Task Report'}
-                    content={reportContent}
-                  />
                 </div>
-              ) : null}
-              {!conversationText && !hasReport && body ? (
-                <MarkdownRenderer content={body} isMobile={isMobile} />
-              ) : null}
-            </>
+              );
+            })
+          ) : (isOrchestratorTask && !hasDuplicateIndependentTalk) ? (
+            <div
+              className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+              style={{
+                background: bubbleBg,
+                color: textColor,
+                padding: '10px 14px',
+                borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                width: 'fit-content',
+                maxWidth: isMobile ? '96%' : '82%',
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+                boxSizing: 'border-box',
+                fontSize: isOpenCode ? 12 : 12.5,
+                lineHeight: 1.45,
+                whiteSpace: 'normal',
+                fontFamily: 'inherit',
+                border: bubbleBorder,
+                boxShadow: bubbleShadow,
+                wordBreak: 'break-word',
+                position: 'relative',
+                userSelect: 'text',
+                alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                marginLeft: isAlignRight ? 'auto' : undefined,
+                marginRight: isAlignRight ? undefined : 'auto'
+              }}
+            >
+              {isSpawnMsg ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 360, maxWidth: isMobile ? '100%' : '85%' }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    paddingBottom: 6,
+                    borderBottom: '1px solid rgba(168, 85, 247, 0.25)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 14 }}>🚀</span>
+                      <span style={{ fontWeight: 800, fontSize: 11.5, letterSpacing: '0.04em', color: '#c084fc', textTransform: 'uppercase' }}>
+                        Spawn Agent
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {spawnRole && (
+                        <span style={{ padding: '1px 7px', borderRadius: 4, fontSize: 10.5, fontWeight: 700, background: 'rgba(168, 85, 247, 0.25)', border: '1px solid rgba(192, 132, 252, 0.5)', color: '#f3e8ff' }}>
+                          {spawnRole}
+                        </span>
+                      )}
+                      <span className="af-spawn-target-name" style={{ fontSize: 11.5, fontWeight: 700, color: '#e9d5ff' }}>
+                        {spawnAgentName || displayTo || 'New Agent'}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ background: 'rgba(15, 23, 42, 0.45)', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                      <span style={{ color: '#c084fc', fontSize: 12, marginTop: 1 }}>📋</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <MarkdownRenderer content={spawnTaskDesc || cleanTaskTitle || 'Khởi tạo agent'} isMobile={isMobile} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: isMobile ? '100%' : 360, maxWidth: isMobile ? '100%' : '85%' }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    paddingBottom: 6,
+                    borderBottom: '1px solid rgba(99, 102, 241, 0.25)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 14 }}>🎯</span>
+                      <span style={{ fontWeight: 800, fontSize: 11.5, letterSpacing: '0.04em', color: '#818cf8', textTransform: 'uppercase' }}>
+                        Giao Việc
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700 }}>
+                      <span className="af-directive-header-orch" style={{ padding: '2px 8px', borderRadius: 6, background: '#0f172a', border: '1px solid rgba(129, 140, 248, 0.5)', color: '#c7d2fe' }}>
+                        👑 {srcAgent?.name || (msg.agentRole === 'orchestrator' ? 'Orchestrator' : 'Orchestrator')}
+                      </span>
+                      <span style={{ color: '#818cf8', fontSize: 12 }}>➔</span>
+                      <span className="af-directive-header-target" style={{ padding: '2px 8px', borderRadius: 6, background: '#0f172a', border: '1px solid rgba(148, 163, 184, 0.4)', color: '#f8fafc' }}>
+                        🤖 {displayTo || 'Agent'}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ background: 'rgba(15, 23, 42, 0.4)', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(99, 102, 241, 0.18)' }}>
+                    {cleanTaskTitle && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, fontSize: 11.5, fontWeight: 700, color: '#93c5fd' }}>
+                        <span>📌</span>
+                        <span>{cleanTaskTitle}</span>
+                      </div>
+                    )}
+                    <MarkdownRenderer content={talkTaskDesc || cleanTaskTitle || (typeof msg.content === 'string' ? msg.content : '')} isMobile={isMobile} />
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* Render riêng bubble trò chuyện cho conversationText hoặc body (nếu có lời thoại) */}
+          {(conversationText || body) && (
+            <div
+              className={`af-bubble${isAlignRight ? ' af-bubble-user' : ''}`}
+              style={{
+                background: isOrchestratorTask ? 'rgba(30, 41, 59, 0.65)' : bubbleBg,
+                color: textColor,
+                padding: '10px 14px',
+                borderRadius: isAlignRight ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                width: 'fit-content',
+                maxWidth: isMobile ? '96%' : '82%',
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+                boxSizing: 'border-box',
+                fontSize: isOpenCode ? 12 : 12.5,
+                lineHeight: 1.45,
+                whiteSpace: 'normal',
+                fontFamily: 'inherit',
+                border: isOrchestratorTask ? '1px solid rgba(148, 163, 184, 0.2)' : bubbleBorder,
+                boxShadow: bubbleShadow,
+                wordBreak: 'break-word',
+                position: 'relative',
+                userSelect: 'text',
+                alignSelf: isAlignRight ? 'flex-end' : 'flex-start',
+                marginLeft: isAlignRight ? 'auto' : undefined,
+                marginRight: isAlignRight ? undefined : 'auto'
+              }}
+            >
+              <MarkdownRenderer content={conversationText || body} isMobile={isMobile} />
+            </div>
           )}
         </div>
       )}
@@ -3003,6 +3440,7 @@ interface Props {
   onFlushQueue?: () => void;
   onClearQueue?: () => void;
   onRemoveQueueItem?: (index: number) => void;
+  onForceSendSingle?: (msgId: string, content: string, targetId: string) => void;
 }
 
 export function ChatPanel({
@@ -3026,12 +3464,14 @@ export function ChatPanel({
   onFlushQueue,
   onClearQueue,
   onRemoveQueueItem,
+  onForceSendSingle,
   connStatus,
   offlineForText,
   uptimeText,
   showToolBlocks = true
 }: Props) {
-  const [input, setInput] = useState('');
+  const [hasText, setHasText] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const [collapsedReports, setCollapsedReports] = useState<Record<string, boolean>>({});
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -3068,12 +3508,18 @@ export function ChatPanel({
   const tooltipText = tooltipParts.length > 0 ? tooltipParts.join(' | ') : `Context: ${rawTokens?.toLocaleString() || 0} tokens`;
 
   const rawDisplay: any[] = allMessages && allMessages.length >= 0 ? allMessages as any[] : messages as any[];
-  const displayMessages = rawDisplay;
+  const displayMessages = useMemo(() => {
+    return [...rawDisplay].sort((a, b) => {
+      const tA = Number(a.timestamp) || 0;
+      const tB = Number(b.timestamp) || 0;
+      return tA - tB;
+    });
+  }, [rawDisplay]);
 
   // Tail-window slice: chỉ lấy visibleCount tin nhắn cuối cùng
-  const totalLen = rawDisplay.length;
+  const totalLen = displayMessages.length;
   const sliceStart = Math.max(0, totalLen - visibleCount);
-  const visibleMessages = totalLen > sliceStart ? rawDisplay.slice(sliceStart) : rawDisplay;
+  const visibleMessages = totalLen > sliceStart ? displayMessages.slice(sliceStart) : displayMessages;
   const hiddenOlderCount = sliceStart;
 
   const loadOlder = useCallback(() => {
@@ -3175,21 +3621,23 @@ export function ChatPanel({
     loadingOlderRef.current = false;
   }, [visibleCount, totalLen]);
 
-const handleSend = () => {
-     console.log('handleSend raw input:', input);
-     const trimmed = input.trim();
-     console.log('handleSend trimmed:', trimmed);
-     if (!trimmed) return;
-     onSend(trimmed);
-     setInput('');
-   };
+  const handleSend = () => {
+    const rawVal = textareaRef.current ? textareaRef.current.value : '';
+    const trimmed = rawVal.trim().normalize('NFC');
+    if (!trimmed) return;
+    onSend(trimmed);
+    if (textareaRef.current) {
+      textareaRef.current.value = '';
+      textareaRef.current.style.height = 'auto';
+    }
+    setHasText(false);
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Bỏ qua Enter khi đang composition IME (gõ tiếng Việt/Unikey): nếu xử lý send
-    // ngay lúc composition chưa hoàn tất, React controlled value bị cắt mất ký tự
-    // đang pending của bộ gõ (ví dụ mất ký tự đầu "Ý" trong "Ý tôi là...").
+    // Bỏ qua Enter khi đang composition IME (gõ tiếng Việt/Unikey):
+    // Native isComposing, isComposingRef hoặc keyCode === 229 (IME pending)
     if (e.key === 'Enter' && !e.shiftKey) {
-      if (isComposingRef.current || e.nativeEvent.isComposing) return;
+      if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
       e.preventDefault();
       handleSend();
     } else if (e.key === 'Escape') {
@@ -3258,6 +3706,8 @@ const handleSend = () => {
               }}>
                 {title || 'Orchestrator'}
               </span>
+
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', background: 'rgba(56, 189, 248, 0.15)', border: '1px solid #38bdf8', borderRadius: 6, color: '#38bdf8', fontWeight: 700, fontSize: 12 }}><span>🎯 KHUNG CHAT ĐANG CHỌN</span></div>
 
               {/* Status Badge */}
               {status && (
@@ -3487,6 +3937,9 @@ const handleSend = () => {
                   onToggleReport={toggleReport}
                   isMobile={isMobile}
                   selectedAgentId={selectedAgentId}
+                  queuedMessages={queuedMessages}
+                  onForceSendSingle={onForceSendSingle}
+                  allMessagesList={displayMessages}
                 />
               ));
             })()}
@@ -3586,18 +4039,19 @@ const handleSend = () => {
                   <button
                     onClick={onFlushQueue}
                     style={{
-                      background: 'rgba(16, 185, 129, 0.18)',
-                      border: '1px solid rgba(52, 211, 153, 0.4)',
-                      color: '#6ee7b7',
+                      background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(59, 130, 246, 0.25) 100%)',
+                      border: '1px solid rgba(245, 158, 11, 0.5)',
+                      color: '#fef3c7',
                       borderRadius: 4,
                       padding: '2px 8px',
                       fontSize: 10.5,
                       fontWeight: 700,
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 6px rgba(245, 158, 11, 0.2)'
                     }}
-                    title="Gộp gửi toàn bộ hàng đợi ngay lập tức"
+                    title="Ngắt lượt cũ và gộp gửi toàn bộ tin nhắn trong hàng đợi ngay lập tức"
                   >
-                    ⚡ Gửi hết
+                    ⚡ Gửi ngay toàn bộ (Ngắt lượt cũ)
                   </button>
                 )}
                 {onClearQueue && (
@@ -3648,6 +4102,25 @@ const handleSend = () => {
                         {q.content.slice(0, 100)}
                       </span>
                     </div>
+                    {onForceSendSingle && (
+                      <button
+                        onClick={() => onForceSendSingle(q.id, q.content, q.to || selectedAgentId || 'orchestrator')}
+                        style={{
+                          background: 'rgba(245, 158, 11, 0.2)',
+                          border: '1px solid rgba(245, 158, 11, 0.45)',
+                          color: '#fbbf24',
+                          borderRadius: 4,
+                          padding: '1px 6px',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          flexShrink: 0
+                        }}
+                        title="Ngắt lượt hiện tại và gửi ngay tin này lập tức"
+                      >
+                        ⚡ Gửi ngay
+                      </button>
+                    )}
                     {onRemoveQueueItem && (
                       <button
                         onClick={() => onRemoveQueueItem(i)}
@@ -3675,8 +4148,14 @@ const handleSend = () => {
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
           <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+            ref={textareaRef}
+            defaultValue=""
+            onChange={(e) => {
+              const currentHasText = Boolean(e.target.value.trim());
+              // Chỉ cập nhật state khi trạng thái rỗng <-> có chữ thay đổi,
+              // tuyệt đối KHÔNG re-render ChatPanel trên mỗi phím gõ để bảo vệ nhịp Backspace của Unikey/EVKey
+              setHasText(prev => (prev !== currentHasText ? currentHasText : prev));
+            }}
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
             onKeyDown={handleKeyDown}
@@ -3710,27 +4189,27 @@ const handleSend = () => {
 
           <button
             onClick={handleSend}
-            disabled={!input.trim()}
+            disabled={!hasText}
             title={loading ? 'Queue' : 'Send'}
             style={{
-              background: input.trim() ? 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)' : 'var(--bg-input)',
-              color: input.trim() ? 'var(--text-primary)' : 'var(--text-muted)',
-              border: input.trim() ? 'none' : '1px solid var(--af-border-strong)',
+              background: hasText ? 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)' : 'var(--bg-input)',
+              color: hasText ? 'var(--text-primary)' : 'var(--text-muted)',
+              border: hasText ? 'none' : '1px solid var(--af-border-strong)',
               borderRadius: 'var(--radius-md)',
               width: 44,
               padding: 0,
               fontSize: 20,
-              cursor: input.trim() ? 'pointer' : 'not-allowed',
+              cursor: hasText ? 'pointer' : 'not-allowed',
               fontWeight: 700,
               height: 44,
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: input.trim() ? '0 2px 10px rgba(37, 99, 235, 0.3)' : 'none',
+              boxShadow: hasText ? '0 2px 10px rgba(37, 99, 235, 0.3)' : 'none',
               transition: 'all 0.2s'
             }}
             onMouseOver={(e) => {
-              if (input.trim()) e.currentTarget.style.transform = 'scale(1.04)';
+              if (hasText) e.currentTarget.style.transform = 'scale(1.04)';
             }}
             onMouseOut={(e) => {
               e.currentTarget.style.transform = 'scale(1)';

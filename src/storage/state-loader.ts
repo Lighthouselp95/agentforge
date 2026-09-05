@@ -11,9 +11,19 @@ export function validateSchema(data: any): StorageSchema | null {
     outbox: Array.isArray(data.outbox) ? data.outbox : [],
     chatQueue: Array.isArray(data.chatQueue) ? data.chatQueue : [],
     logs: Array.isArray(data.logs) ? data.logs : [],
-    unprocessedUserMessages: (data.unprocessedUserMessages && typeof data.unprocessedUserMessages === 'object')
-      ? data.unprocessedUserMessages
-      : (data.unprocessedMessages && typeof data.unprocessedMessages === 'object' ? data.unprocessedMessages : {})
+    unprocessedUserMessages: (() => {
+      const raw = (data.unprocessedUserMessages && typeof data.unprocessedUserMessages === 'object')
+        ? data.unprocessedUserMessages
+        : (data.unprocessedMessages && typeof data.unprocessedMessages === 'object' ? data.unprocessedMessages : {});
+      const clean: Record<string, string[]> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        if (Array.isArray(v)) {
+          const valid = v.filter((m: any) => typeof m === 'string' && m.trim() && !m.trim().startsWith('[TEAM]') && !m.includes('Your ID:'));
+          if (valid.length > 0) clean[k] = valid;
+        }
+      }
+      return clean;
+    })()
   };
 }
 

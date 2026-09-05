@@ -92,9 +92,7 @@ export class MessageRouter {
         msgType:
           fromAgent.type === 'orchestrator'
             ? (isInternal ? 'orchestrator_internal' : undefined)
-            : (isInternal ? 'talk' : undefined),
-        ...(!isToOrchestrator && thinking ? { thinking } : {}),
-        ...(!isToOrchestrator && toolCalls && toolCalls.length ? { toolCalls } : {})
+            : (isInternal ? 'talk' : undefined)
       };
 
       // Dedup broadcast UI

@@ -94,6 +94,14 @@ export class StreamScanner {
       } catch (err: any) {
         console.error(`[StreamDispatch] dispatch error: ${err?.message || err}`);
       }
+      if (cmd.fullMatch) {
+        const matchIdx = accumulated.indexOf(cmd.fullMatch);
+        if (matchIdx !== -1) {
+          accumulated = accumulated.substring(0, matchIdx) + accumulated.substring(matchIdx + cmd.fullMatch.length);
+        } else {
+          accumulated = accumulated.replace(cmd.fullMatch, '');
+        }
+      }
     }
 
     return accumulated;
